@@ -1,0 +1,90 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 15 23 42;
+    --foreground: 248 250 252;
+  }
+
+  * {
+    @apply border-dark-700;
+  }
+
+  body {
+    @apply bg-dark-950 text-dark-50 antialiased;
+    font-feature-settings: "rlig" 1, "calt" 1;
+  }
+
+  ::-webkit-scrollbar {
+    @apply w-1.5;
+  }
+  ::-webkit-scrollbar-track {
+    @apply bg-dark-900;
+  }
+  ::-webkit-scrollbar-thumb {
+    @apply bg-dark-600 rounded-full;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    @apply bg-gold-600;
+  }
+}
+
+@layer components {
+  .btn-primary {
+    @apply inline-flex items-center justify-center gap-2 rounded-xl bg-gold-500 px-6 py-3 text-sm font-semibold text-dark-950 transition-all hover:bg-gold-400 hover:shadow-lg hover:shadow-gold-500/25 active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+
+  .btn-secondary {
+    @apply inline-flex items-center justify-center gap-2 rounded-xl border border-dark-600 bg-dark-800 px-6 py-3 text-sm font-semibold text-dark-100 transition-all hover:border-gold-500/50 hover:bg-dark-700 active:scale-95;
+  }
+
+  .btn-ghost {
+    @apply inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2 text-sm font-medium text-dark-300 transition-all hover:bg-dark-800 hover:text-dark-100;
+  }
+
+  .card {
+    @apply rounded-2xl border border-dark-800 bg-dark-900 p-6;
+  }
+
+  .card-hover {
+    @apply card transition-all hover:border-gold-500/30 hover:bg-dark-800 hover:shadow-xl hover:shadow-black/30;
+  }
+
+  .input {
+    @apply w-full rounded-xl border border-dark-700 bg-dark-800 px-4 py-3 text-sm text-dark-100 placeholder-dark-500 outline-none ring-0 transition-all focus:border-gold-500 focus:ring-2 focus:ring-gold-500/20;
+  }
+
+  .label {
+    @apply block text-sm font-medium text-dark-300 mb-1.5;
+  }
+
+  .badge {
+    @apply inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-semibold;
+  }
+
+  .badge-gold {
+    @apply badge bg-gold-500/20 text-gold-400;
+  }
+
+  .badge-green {
+    @apply badge bg-emerald-500/20 text-emerald-400;
+  }
+
+  .badge-red {
+    @apply badge bg-red-500/20 text-red-400;
+  }
+
+  .badge-blue {
+    @apply badge bg-blue-500/20 text-blue-400;
+  }
+
+  .section-title {
+    @apply text-2xl font-bold text-dark-50 tracking-tight;
+  }
+
+  .gradient-text {
+    @apply bg-gradient-to-r from-gold-400 to-gold-200 bg-clip-text text-transparent;
+  }
+}

@@ -1,0 +1,432 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+// ─── Enums ───────────────────────────────────────────────────────────────────
+
+enum Role {
+  CUSTOMER
+  FRANCHISE_OWNER
+  ADMIN
+}
+
+enum DeviceType {
+  PHONE
+  LAPTOP
+  TV
+  TABLET
+  ACCESSORY
+  OTHER
+}
+
+enum Condition {
+  A  // Excellent – like new
+  B  // Good – minor wear
+  C  // Fair – visible wear
+  D  // Poor – functional but damaged
+}
+
+enum BuybackStatus {
+  PENDING
+  UNDER_REVIEW
+  ACCEPTED
+  REJECTED
+  COMPLETED
+  CANCELLED
+}
+
+enum OrderStatus {
+  PENDING
+  CONFIRMED
+  IN_TRANSIT
+  DELIVERED
+  CANCELLED
+  REFUNDED
+}
+
+enum DeliveryMethod {
+  DROP_IN_STORE
+  PICKUP_FROM_HOME
+  COURIER
+}
+
+enum PaymentMethod {
+  CASH
+  CARD
+  WALLET
+  CMI
+  STRIPE
+}
+
+enum PaymentStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+  REFUNDED
+}
+
+enum ListingStatus {
+  DRAFT
+  ACTIVE
+  SOLD
+  ARCHIVED
+  RESERVED
+}
+
+enum FranchiseStatus {
+  PENDING
+  ACTIVE
+  SUSPENDED
+  CLOSED
+}
+
+// ─── Users ───────────────────────────────────────────────────────────────────
+
+model User {
+  id             String    @id @default(cuid())
+  email          String    @unique
+  phone          String?   @unique
+  passwordHash   String
+  firstName      String
+  lastName       String
+  role           Role      @default(CUSTOMER)
+  avatarUrl      String?
+  isVerified     Boolean   @default(false)
+  isActive       Boolean   @default(true)
+  lastLoginAt    DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  // Relations
+  franchise       Franchise?
+  buybackRequests BuybackRequest[]
+  orders          Order[]           @relation("CustomerOrders")
+  payments        Payment[]
+  sessions        Session[]
+  notifications   Notification[]
+
+  @@map("users")
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  userId       String
+  refreshToken String   @unique
+  userAgent    String?
+  ipAddress    String?
+  expiresAt    DateTime
+  createdAt    DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("sessions")
+}
+
+// ─── Franchises ───────────────────────────────────────────────────────────────
+
+model Franchise {
+  id             String          @id @default(cuid())
+  ownerId        String          @unique
+  name           String
+  slug           String          @unique
+  description    String?
+  logoUrl        String?
+  status         FranchiseStatus @default(PENDING)
+  commissionRate Float           @default(0.15)  // 15% platform cut
+
+  // Location
+  address        String
+  city           String
+  region         String
+  postalCode     String?
+  country        String          @default("MA")
+  latitude       Float?
+  longitude      Float?
+  phoneNumber    String?
+  whatsappNumber String?
+  email          String?
+
+  // Business hours (JSON: { mon: "09:00-18:00", ... })
+  businessHours  Json?
+
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  // Relations
+  owner          User              @relation(fields: [ownerId], references: [id])
+  inventory      Inventory[]
+  listings       ProductListing[]
+  buybackRequests BuybackRequest[]
+  commissions    Commission[]
+  orders         Order[]           @relation("FranchiseOrders")
+
+  @@map("franchises")
+}
+
+// ─── Products & Catalog ───────────────────────────────────────────────────────
+
+model Brand {
+  id        String    @id @default(cuid())
+  name      String    @unique
+  slug      String    @unique
+  logoUrl   String?
+  isActive  Boolean   @default(true)
+  createdAt DateTime  @default(now())
+
+  models    DeviceModel[]
+
+  @@map("brands")
+}
+
+model DeviceModel {
+  id               String    @id @default(cuid())
+  brandId          String
+  name             String
+  slug             String
+  deviceType       DeviceType
+  releaseYear      Int?
+  baseMarketPrice  Float?    // MAD – baseline for pricing engine
+  imageUrl         String?
+  specs            Json?     // { storage, ram, color, etc. }
+  isActive         Boolean   @default(true)
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  brand            Brand            @relation(fields: [brandId], references: [id])
+  listings         ProductListing[]
+  buybackRequests  BuybackRequest[]
+  priceHistory     PriceHistory[]
+  inventoryItems   Inventory[]
+
+  @@unique([brandId, slug])
+  @@map("device_models")
+}
+
+model ProductListing {
+  id            String        @id @default(cuid())
+  franchiseId   String
+  deviceModelId String
+  condition     Condition
+  status        ListingStatus @default(DRAFT)
+  title         String
+  description   String?
+  buybackPrice  Float         // what franchise paid
+  listingPrice  Float         // selling price on platform
+  originalPrice Float?        // RRP for reference
+  stockQuantity Int           @default(1)
+  soldCount     Int           @default(0)
+  viewCount     Int           @default(0)
+  images        Json          // string[] of URLs
+  specs         Json?         // overrides / additions to model specs
+  isNegotiable  Boolean       @default(false)
+  warrantyMonths Int          @default(0)
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+
+  franchise    Franchise       @relation(fields: [franchiseId], references: [id])
+  deviceModel  DeviceModel     @relation(fields: [deviceModelId], references: [id])
+  orderItems   OrderItem[]
+  inventory    Inventory?
+
+  @@index([franchiseId])
+  @@index([deviceModelId])
+  @@index([status])
+  @@map("product_listings")
+}
+
+// ─── Inventory ─────────────────────────────────────────────────────────────
+
+model Inventory {
+  id            String   @id @default(cuid())
+  franchiseId   String
+  listingId     String   @unique
+  deviceModelId String
+  quantity      Int      @default(0)
+  reserved      Int      @default(0)  // in pending orders
+  updatedAt     DateTime @updatedAt
+
+  franchise   Franchise      @relation(fields: [franchiseId], references: [id])
+  listing     ProductListing @relation(fields: [listingId], references: [id])
+  deviceModel DeviceModel    @relation(fields: [deviceModelId], references: [id])
+
+  @@index([franchiseId])
+  @@map("inventory")
+}
+
+// ─── Buyback Engine ──────────────────────────────────────────────────────────
+
+model BuybackRequest {
+  id              String        @id @default(cuid())
+  customerId      String
+  franchiseId     String?       // assigned after matching
+  deviceModelId   String
+  condition       Condition
+  status          BuybackStatus @default(PENDING)
+  deliveryMethod  DeliveryMethod
+
+  // AI / Pricing Engine output
+  estimatedBuybackPrice Float?
+  estimatedResaleMin    Float?
+  estimatedResaleMax    Float?
+  finalBuybackPrice     Float?  // after franchise review/override
+  franchiseNotes        String?
+
+  // Customer-provided info
+  description     String?
+  images          Json?         // string[] of upload URLs
+  imei            String?       // optional – for fraud check
+
+  // Fraud detection
+  fraudScore      Float?        // 0–1 (0 = clean, 1 = high risk)
+  isFlagged       Boolean       @default(false)
+
+  // Scheduling
+  preferredDate   DateTime?
+  pickupAddress   String?
+
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+  completedAt     DateTime?
+
+  customer  User         @relation(fields: [customerId], references: [id])
+  franchise Franchise?   @relation(fields: [franchiseId], references: [id])
+  model     DeviceModel  @relation(fields: [deviceModelId], references: [id])
+  order     Order?
+
+  @@index([customerId])
+  @@index([franchiseId])
+  @@index([status])
+  @@map("buyback_requests")
+}
+
+// ─── Orders ──────────────────────────────────────────────────────────────────
+
+model Order {
+  id             String         @id @default(cuid())
+  customerId     String
+  franchiseId    String
+  buybackId      String?        @unique  // if order originated from buyback
+  status         OrderStatus    @default(PENDING)
+  deliveryMethod DeliveryMethod
+  deliveryAddress Json?          // { address, city, region, zip, lat, lng }
+  totalAmount    Float
+  notes          String?
+  trackingNumber String?
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+  deliveredAt    DateTime?
+
+  customer  User             @relation("CustomerOrders", fields: [customerId], references: [id])
+  franchise Franchise        @relation("FranchiseOrders", fields: [franchiseId], references: [id])
+  buyback   BuybackRequest?  @relation(fields: [buybackId], references: [id])
+  items     OrderItem[]
+  payment   Payment?
+  commission Commission?
+
+  @@index([customerId])
+  @@index([franchiseId])
+  @@index([status])
+  @@map("orders")
+}
+
+model OrderItem {
+  id         String  @id @default(cuid())
+  orderId    String
+  listingId  String
+  quantity   Int     @default(1)
+  unitPrice  Float
+  totalPrice Float
+
+  order   Order          @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  listing ProductListing @relation(fields: [listingId], references: [id])
+
+  @@map("order_items")
+}
+
+// ─── Payments ─────────────────────────────────────────────────────────────────
+
+model Payment {
+  id              String        @id @default(cuid())
+  orderId         String        @unique
+  userId          String
+  method          PaymentMethod
+  status          PaymentStatus @default(PENDING)
+  amount          Float
+  currency        String        @default("MAD")
+  gatewayRef      String?       // external payment ID (Stripe/CMI)
+  gatewayResponse Json?
+  paidAt          DateTime?
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  order Order @relation(fields: [orderId], references: [id])
+  user  User  @relation(fields: [userId], references: [id])
+
+  @@map("payments")
+}
+
+// ─── Commissions ─────────────────────────────────────────────────────────────
+
+model Commission {
+  id          String   @id @default(cuid())
+  orderId     String   @unique
+  franchiseId String
+  saleAmount  Float
+  rate        Float    // snapshot of commissionRate at time of sale
+  amount      Float    // saleAmount * rate
+  isPaid      Boolean  @default(false)
+  paidAt      DateTime?
+  createdAt   DateTime @default(now())
+
+  order     Order     @relation(fields: [orderId], references: [id])
+  franchise Franchise @relation(fields: [franchiseId], references: [id])
+
+  @@index([franchiseId])
+  @@map("commissions")
+}
+
+// ─── Pricing History ─────────────────────────────────────────────────────────
+
+model PriceHistory {
+  id            String     @id @default(cuid())
+  deviceModelId String
+  condition     Condition
+  marketPrice   Float
+  buybackMin    Float
+  buybackMax    Float
+  resaleMin     Float
+  resaleMax     Float
+  source        String     @default("system")  // system | admin | scraped
+  recordedAt    DateTime   @default(now())
+
+  deviceModel DeviceModel @relation(fields: [deviceModelId], references: [id])
+
+  @@index([deviceModelId])
+  @@index([recordedAt])
+  @@map("price_history")
+}
+
+// ─── Notifications ────────────────────────────────────────────────────────────
+
+model Notification {
+  id        String   @id @default(cuid())
+  userId    String
+  title     String
+  body      String
+  type      String   // order_update | buyback_update | system | promo
+  data      Json?
+  isRead    Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("notifications")
+}
