@@ -12,9 +12,10 @@ concurrency:
 
 jobs:
   lint-typecheck:
-    name: "Lint & Type-check"
+    name: "Lint & Type-check (${{ matrix.app }})"
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false        # FIX: don't cancel sibling jobs when one leg fails
       matrix:
         app: [web, api]
 
@@ -25,15 +26,13 @@ jobs:
         with:
           node-version: "20"
           cache: "npm"
-          cache-dependency-path: "apps/${{ matrix.app }}/package-lock.json"
+          cache-dependency-path: "package-lock.json"   # FIX: root lockfile (monorepo)
 
-      - name: Install deps
-        working-directory: apps/${{ matrix.app }}
-        run: npm ci
+      - name: Install dependencies
+        run: npm install                                # FIX: install from root, not per-app
 
-      - name: Type-check
-        working-directory: apps/${{ matrix.app }}
-        run: npm run type-check || true
+      - name: Type-check ${{ matrix.app }}
+        run: npm run type-check --workspace=apps/${{ matrix.app }} || true  # FIX: workspace flag
 
   build-web:
     name: "Build web (production)"
@@ -47,10 +46,10 @@ jobs:
         with:
           node-version: "20"
           cache: "npm"
-          cache-dependency-path: "apps/web/package-lock.json"
+          cache-dependency-path: "package-lock.json"   # FIX: root lockfile
 
-      - run: npm ci
-        working-directory: apps/web
+      - name: Install dependencies
+        run: npm install                                # FIX: root install
 
       - name: Build Next.js (web mode)
         working-directory: apps/web
@@ -69,11 +68,15 @@ jobs:
         with:
           node-version: "20"
           cache: "npm"
-          cache-dependency-path: "packages/database/package-lock.json"
+          cache-dependency-path: "package-lock.json"   # FIX: root lockfile
 
-      - run: npm ci
-        working-directory: packages/database
+      - name: Install dependencies
+        run: npm install                                # FIX: root install (resolves workspace symlinks)
 
       - name: Validate Prisma schema
         working-directory: packages/database
+        env:
+          # prisma validate only reads schema.prisma — dummy URL satisfies env check
+          DATABASE_URL: "postgresql://noop:noop@localhost:5432/noop"
+          DIRECT_URL: "postgresql://noop:noop@localhost:5432/noop"
         run: npx prisma validate
