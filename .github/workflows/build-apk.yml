@@ -1,0 +1,294 @@
+name: Build Android APK
+
+on:
+  # Trigger on pushes to main/release branches OR version tags
+  push:
+    branches:
+      - main
+      - "release/**"
+    tags:
+      - "v*.*.*"
+    paths:
+      - "apps/web/**"
+      - ".github/workflows/build-apk.yml"
+
+  # Manual trigger with options
+  workflow_dispatch:
+    inputs:
+      build_type:
+        description: "Build type"
+        required: true
+        default: "debug"
+        type: choice
+        options:
+          - debug
+          - release
+      upload_to_release:
+        description: "Attach APK to GitHub Release"
+        required: false
+        default: false
+        type: boolean
+
+# Cancel in-progress runs on the same branch
+concurrency:
+  group: apk-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: "20"
+  JAVA_VERSION: "17"
+  ANDROID_BUILD_TOOLS_VERSION: "34.0.0"
+  ANDROID_COMPILE_SDK: "34"
+  ANDROID_MIN_SDK: "24"
+
+jobs:
+  # ─────────────────────────────────────────────────────────────────────────────
+  # JOB 1 – Build the Next.js web app as static export
+  # ─────────────────────────────────────────────────────────────────────────────
+  build-web:
+    name: "Build Next.js (static export)"
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: "npm"
+          cache-dependency-path: "apps/web/package-lock.json"
+
+      - name: Install dependencies
+        working-directory: apps/web
+        run: npm ci
+
+      - name: Type-check
+        working-directory: apps/web
+        run: npm run type-check
+
+      - name: Build Next.js (static export for mobile)
+        working-directory: apps/web
+        env:
+          NEXT_PUBLIC_IS_MOBILE: "true"
+          NEXT_PUBLIC_API_URL: ${{ secrets.NEXT_PUBLIC_API_URL || 'https://api.dabacash.ma' }}
+          NEXT_PUBLIC_WS_URL: ${{ secrets.NEXT_PUBLIC_WS_URL || 'wss://api.dabacash.ma' }}
+        run: npm run build:mobile
+
+      - name: Upload static web output
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-out
+          path: apps/web/out/
+          retention-days: 1
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # JOB 2 – Build Android APK with Capacitor
+  # ─────────────────────────────────────────────────────────────────────────────
+  build-apk:
+    name: "Build APK (${{ github.event.inputs.build_type || 'debug' }})"
+    runs-on: ubuntu-latest
+    needs: build-web
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # ── Node.js setup ──────────────────────────────────────────────────────
+      - name: Setup Node.js ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: "npm"
+          cache-dependency-path: "apps/web/package-lock.json"
+
+      - name: Install web dependencies
+        working-directory: apps/web
+        run: npm ci
+
+      # ── Java + Android SDK setup ───────────────────────────────────────────
+      - name: Setup JDK ${{ env.JAVA_VERSION }}
+        uses: actions/setup-java@v4
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: "temurin"
+          cache: gradle
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          api-level: ${{ env.ANDROID_COMPILE_SDK }}
+          build-tools: ${{ env.ANDROID_BUILD_TOOLS_VERSION }}
+          ndk: false
+
+      - name: Accept Android SDK licenses
+        run: yes | sdkmanager --licenses || true
+
+      # ── Restore built web output ───────────────────────────────────────────
+      - name: Download static web output
+        uses: actions/download-artifact@v4
+        with:
+          name: web-out
+          path: apps/web/out/
+
+      # ── Capacitor: add + sync ─────────────────────────────────────────────
+      - name: Add Capacitor Android platform (if not committed)
+        working-directory: apps/web
+        run: |
+          if [ ! -d "android" ]; then
+            npx cap add android
+          fi
+
+      - name: Copy Android config files
+        working-directory: apps/web
+        run: |
+          # Overlay our custom strings and network security config
+          cp android-config/strings.xml android/app/src/main/res/values/strings.xml
+          cp android-config/network_security_config.xml \
+             android/app/src/main/res/xml/network_security_config.xml 2>/dev/null || \
+          mkdir -p android/app/src/main/res/xml && \
+          cp android-config/network_security_config.xml \
+             android/app/src/main/res/xml/network_security_config.xml
+
+      - name: Sync Capacitor (web → Android)
+        working-directory: apps/web
+        run: npx cap sync android
+
+      # ── Gradle cache ──────────────────────────────────────────────────────
+      - name: Cache Gradle packages
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+            apps/web/android/.gradle
+          key: gradle-${{ hashFiles('apps/web/android/**/*.gradle*', 'apps/web/android/gradle/wrapper/gradle-wrapper.properties') }}
+          restore-keys: |
+            gradle-
+
+      - name: Make Gradle wrapper executable
+        working-directory: apps/web/android
+        run: chmod +x gradlew
+
+      # ── DEBUG BUILD ────────────────────────────────────────────────────────
+      - name: Build debug APK
+        if: ${{ github.event.inputs.build_type != 'release' && !startsWith(github.ref, 'refs/tags/') }}
+        working-directory: apps/web/android
+        run: ./gradlew assembleDebug --no-daemon --stacktrace
+
+      - name: Upload debug APK
+        if: ${{ github.event.inputs.build_type != 'release' && !startsWith(github.ref, 'refs/tags/') }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: dabacash-debug-${{ github.sha }}
+          path: apps/web/android/app/build/outputs/apk/debug/app-debug.apk
+          retention-days: 14
+
+      # ── RELEASE BUILD (signed) ─────────────────────────────────────────────
+      - name: Decode keystore from secret
+        if: ${{ github.event.inputs.build_type == 'release' || startsWith(github.ref, 'refs/tags/') }}
+        run: |
+          echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 --decode \
+            > apps/web/android/app/dabacash.keystore
+
+      - name: Build signed release APK
+        if: ${{ github.event.inputs.build_type == 'release' || startsWith(github.ref, 'refs/tags/') }}
+        working-directory: apps/web/android
+        env:
+          KEYSTORE_PATH: "dabacash.keystore"
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          ./gradlew assembleRelease \
+            -Pandroid.injected.signing.store.file="$KEYSTORE_PATH" \
+            -Pandroid.injected.signing.store.password="$KEYSTORE_PASSWORD" \
+            -Pandroid.injected.signing.key.alias="$KEY_ALIAS" \
+            -Pandroid.injected.signing.key.password="$KEY_PASSWORD" \
+            --no-daemon --stacktrace
+
+      - name: Rename release APK
+        if: ${{ github.event.inputs.build_type == 'release' || startsWith(github.ref, 'refs/tags/') }}
+        run: |
+          VERSION=${GITHUB_REF_NAME:-$(git describe --tags --abbrev=0 2>/dev/null || echo "1.0.0")}
+          mv apps/web/android/app/build/outputs/apk/release/app-release.apk \
+             apps/web/android/app/build/outputs/apk/release/dabacash-${VERSION}.apk
+
+      - name: Upload signed release APK
+        if: ${{ github.event.inputs.build_type == 'release' || startsWith(github.ref, 'refs/tags/') }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: dabacash-release-${{ github.ref_name }}
+          path: apps/web/android/app/build/outputs/apk/release/dabacash-*.apk
+          retention-days: 90
+
+      # ── Attach APK to GitHub Release (when tag is pushed) ─────────────────
+      - name: Attach APK to GitHub Release
+        if: ${{ startsWith(github.ref, 'refs/tags/') }}
+        uses: softprops/action-gh-release@v2
+        with:
+          files: apps/web/android/app/build/outputs/apk/release/dabacash-*.apk
+          generate_release_notes: true
+          body: |
+            ## DabaCash ${{ github.ref_name }}
+
+            ### Installation
+            1. Téléchargez le fichier `dabacash-${{ github.ref_name }}.apk`
+            2. Sur votre Android: **Paramètres → Sécurité → Sources inconnues** (activer)
+            3. Ouvrez le fichier APK et installez
+
+            > APK signé avec la clé de production DabaCash.
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # JOB 3 – APK analysis report (taille, permissions, SDK info)
+  # ─────────────────────────────────────────────────────────────────────────────
+  analyze-apk:
+    name: "APK Analysis"
+    runs-on: ubuntu-latest
+    needs: build-apk
+    if: always() && needs.build-apk.result == 'success'
+
+    steps:
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: "temurin"
+
+      - name: Download APK artifact
+        uses: actions/download-artifact@v4
+        with:
+          pattern: dabacash-*
+          merge-multiple: true
+          path: apk-output/
+
+      - name: Analyze APK (aapt)
+        run: |
+          APK=$(find apk-output -name "*.apk" | head -1)
+          if [ -n "$APK" ]; then
+            echo "### APK Analysis Report" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "**File:** $(basename $APK)" >> $GITHUB_STEP_SUMMARY
+            echo "**Size:** $(du -sh $APK | cut -f1)" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+
+            # aapt is in Android build tools
+            if command -v aapt &> /dev/null; then
+              echo "**Package info:**" >> $GITHUB_STEP_SUMMARY
+              echo '```' >> $GITHUB_STEP_SUMMARY
+              aapt dump badging "$APK" | grep -E "^(package|application-label|uses-permission|sdkVersion|targetSdkVersion)" >> $GITHUB_STEP_SUMMARY
+              echo '```' >> $GITHUB_STEP_SUMMARY
+            fi
+          fi
+
+      - name: Print build summary
+        run: |
+          echo "## ✅ DabaCash APK Build Complete" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| | |" >> $GITHUB_STEP_SUMMARY
+          echo "|---|---|" >> $GITHUB_STEP_SUMMARY
+          echo "| Branch | \`${{ github.ref_name }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Commit | \`${{ github.sha }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Build type | \`${{ github.event.inputs.build_type || 'debug' }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Triggered by | ${{ github.actor }} |" >> $GITHUB_STEP_SUMMARY

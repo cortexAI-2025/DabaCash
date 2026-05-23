@@ -1,0 +1,7 @@
+## This file is machine-specific and should NOT be committed.
+## Copy to apps/web/android/local.properties
+
+# Path to Android SDK on your machine
+sdk.dir=/Users/YOUR_NAME/Library/Android/sdk   # macOS
+# sdk.dir=/home/YOUR_NAME/Android/Sdk           # Linux
+# sdk.dir=C\:\\Users\\YOUR_NAME\\AppData\\Local\\Android\\Sdk  # Windows
