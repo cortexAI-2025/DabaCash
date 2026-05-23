@@ -34,7 +34,10 @@ concurrency:
   group: apk-${{ github.ref }}
   cancel-in-progress: true
 
+# Force actions/checkout and actions/setup-node to use Node 24 runtime
+# (Node 20 runner deprecated — removed September 16th, 2026)
 env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
   NODE_VERSION: "20"
   JAVA_VERSION: "17"
   ANDROID_BUILD_TOOLS_VERSION: "34.0.0"
@@ -57,11 +60,15 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
-          cache: "npm"
-          cache-dependency-path: "package-lock.json"   # FIX: root lockfile
+
+      - uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: npm-${{ runner.os }}-${{ hashFiles('**/package.json') }}
+          restore-keys: npm-${{ runner.os }}-
 
       - name: Install dependencies
-        run: npm install                                # FIX: root install (monorepo)
+        run: npm install
 
       - name: Type-check web
         run: npm run type-check --workspace=apps/web || true
@@ -98,11 +105,15 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
-          cache: "npm"
-          cache-dependency-path: "package-lock.json"   # FIX: root lockfile
+
+      - uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: npm-${{ runner.os }}-${{ hashFiles('**/package.json') }}
+          restore-keys: npm-${{ runner.os }}-
 
       - name: Install dependencies
-        run: npm install                                # FIX: root install
+        run: npm install
 
       # ── Java + Android SDK setup ───────────────────────────────────────────
       - name: Setup JDK ${{ env.JAVA_VERSION }}
