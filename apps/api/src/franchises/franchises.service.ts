@@ -10,6 +10,7 @@ export class FranchisesService {
       where: { status: "ACTIVE" },
       select: {
         id: true, name: true, slug: true, city: true, region: true,
+        cityRef: { select: { slug: true, name: true } },
         address: true, latitude: true, longitude: true,
         phoneNumber: true, whatsappNumber: true, businessHours: true,
       },

@@ -4,7 +4,7 @@ import { JwtAuthGuard } from "../common/guards/jwt-auth.guard";
 import { RolesGuard } from "../common/guards/roles.guard";
 import { Roles } from "../common/decorators/roles.decorator";
 import { AdminService } from "./admin.service";
-import { Role } from "@dabacash/database";
+import { FranchiseStatus, Role } from "@dabacash/database";
 
 @ApiTags("admin")
 @ApiBearerAuth()
@@ -30,7 +30,7 @@ export class AdminController {
   @ApiOperation({ summary: "Update franchise status or commission" })
   updateFranchise(
     @Param("id") id: string,
-    @Body() data: { status?: string; commissionRate?: number }
+    @Body() data: { status?: FranchiseStatus; commissionRate?: number }
   ) {
     return this.admin.updateFranchise(id, data);
   }

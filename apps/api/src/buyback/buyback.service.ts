@@ -1,8 +1,9 @@
-import { Injectable, ForbiddenException, NotFoundException } from "@nestjs/common";
+import { Injectable, ForbiddenException, BadRequestException } from "@nestjs/common";
 import { PrismaService } from "../common/prisma/prisma.service";
 import { PricingService } from "../pricing/pricing.service";
 import { CreateBuybackDto, ReviewBuybackDto } from "./dto/buyback.dto";
-import { BuybackStatus, Role } from "@dabacash/database";
+import { BuybackStatus, DeliveryMethod } from "@dabacash/database";
+import { haversineKm } from "../common/geo";
 
 @Injectable()
 export class BuybackService {
@@ -23,15 +24,16 @@ export class BuybackService {
       claimedAge: 0, // TODO: derive from model release year
     });
 
-    // Assign nearest franchise (simplified – take first active)
-    const franchise = await this.prisma.franchise.findFirst({
-      where: { status: "ACTIVE" },
-    });
+    const city = await this.prisma.city.findUnique({ where: { slug: dto.citySlug } });
+    if (!city || !city.isActive) throw new BadRequestException(`Unknown city: ${dto.citySlug}`);
+
+    const franchise = await this.matchFranchise(city, dto.deliveryMethod);
 
     return this.prisma.buybackRequest.create({
       data: {
         customerId,
         franchiseId: franchise?.id,
+        cityId: city.id,
         deviceModelId: dto.deviceModelId,
         condition: dto.condition,
         deliveryMethod: dto.deliveryMethod,
@@ -53,6 +55,43 @@ export class BuybackService {
     });
   }
 
+  /**
+   * Same-city franchise first; otherwise the nearest active one (drop-in only,
+   * since a home pickup needs a local franchise to dispatch from).
+   */
+  private async matchFranchise(
+    city: { id: string; latitude: number; longitude: number },
+    deliveryMethod: DeliveryMethod
+  ) {
+    const franchises = await this.prisma.franchise.findMany({
+      where: { status: "ACTIVE" },
+      include: { cityRef: { select: { latitude: true, longitude: true } } },
+    });
+
+    const local = franchises.find((f) => f.cityId === city.id);
+    if (local) return local;
+
+    if (deliveryMethod === DeliveryMethod.PICKUP_FROM_HOME) {
+      throw new BadRequestException(
+        "L'enlèvement à domicile n'est pas encore disponible dans cette ville. Déposez votre appareil en franchise."
+      );
+    }
+
+    let best: (typeof franchises)[number] | undefined;
+    let bestKm = Infinity;
+    for (const f of franchises) {
+      const lat = f.latitude ?? f.cityRef?.latitude;
+      const lng = f.longitude ?? f.cityRef?.longitude;
+      if (lat == null || lng == null) continue;
+      const km = haversineKm(city, { latitude: lat, longitude: lng });
+      if (km < bestKm) {
+        bestKm = km;
+        best = f;
+      }
+    }
+    return best;
+  }
+
   async findAllForCustomer(customerId: string) {
     return this.prisma.buybackRequest.findMany({
       where: { customerId },
@@ -64,9 +103,12 @@ export class BuybackService {
     });
   }
 
-  async findAllForFranchise(franchiseId: string) {
+  async findAllForFranchise(franchiseOwnerId: string) {
+    const franchise = await this.prisma.franchise.findUniqueOrThrow({
+      where: { ownerId: franchiseOwnerId },
+    });
     return this.prisma.buybackRequest.findMany({
-      where: { franchiseId },
+      where: { franchiseId: franchise.id },
       include: {
         customer: { select: { firstName: true, lastName: true, email: true, phone: true } },
         model: { include: { brand: true } },

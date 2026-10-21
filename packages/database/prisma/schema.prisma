@@ -62,6 +62,7 @@ enum PaymentMethod {
   WALLET
   CMI
   STRIPE
+  ASLAN   // aslan.ma hosted checkout (card + cash-to-web)
 }
 
 enum PaymentStatus {
@@ -143,7 +144,8 @@ model Franchise {
 
   // Location
   address        String
-  city           String
+  city           String          // display name, kept in sync with cityRef
+  cityId         String?
   region         String
   postalCode     String?
   country        String          @default("MA")
@@ -161,16 +163,37 @@ model Franchise {
 
   // Relations
   owner          User              @relation(fields: [ownerId], references: [id])
+  cityRef        City?             @relation(fields: [cityId], references: [id])
   inventory      Inventory[]
   listings       ProductListing[]
   buybackRequests BuybackRequest[]
   commissions    Commission[]
   orders         Order[]           @relation("FranchiseOrders")
 
+  @@index([cityId])
   @@map("franchises")
 }
 
 // ─── Products & Catalog ───────────────────────────────────────────────────────
+
+// ─── Cities (10 main Moroccan cities) ───────────────────────────────────────
+
+model City {
+  id        String   @id @default(cuid())
+  slug      String   @unique
+  name      String
+  nameAr    String
+  region    String
+  latitude  Float
+  longitude Float
+  isActive  Boolean  @default(true)
+  position  Int      @default(0)
+
+  franchises Franchise[]
+  buybacks   BuybackRequest[]
+
+  @@map("cities")
+}
 
 model Brand {
   id        String    @id @default(cuid())
@@ -266,6 +289,7 @@ model BuybackRequest {
   id              String        @id @default(cuid())
   customerId      String
   franchiseId     String?       // assigned after matching
+  cityId          String?       // customer's city, drives franchise matching
   deviceModelId   String
   condition       Condition
   status          BuybackStatus @default(PENDING)
@@ -297,6 +321,7 @@ model BuybackRequest {
 
   customer  User         @relation(fields: [customerId], references: [id])
   franchise Franchise?   @relation(fields: [franchiseId], references: [id])
+  city      City?        @relation(fields: [cityId], references: [id])
   model     DeviceModel  @relation(fields: [deviceModelId], references: [id])
   order     Order?
 
@@ -360,7 +385,10 @@ model Payment {
   status          PaymentStatus @default(PENDING)
   amount          Float
   currency        String        @default("MAD")
-  gatewayRef      String?       // external payment ID (Stripe/CMI)
+  gatewayRef      String?       @unique  // Aslan checkout session id (cs_...)
+  checkoutUrl     String?       // hosted Aslan checkout page
+  checkoutExpiresAt DateTime?
+  checkoutAttempts Int          @default(0)  // part of the Idempotency-Key
   gatewayResponse Json?
   paidAt          DateTime?
   createdAt       DateTime      @default(now())

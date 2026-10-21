@@ -42,8 +42,21 @@ jobs:
       - name: Install dependencies
         run: npm install
 
+      # The API's types come from the generated Prisma client
+      - name: Generate Prisma client
+        if: matrix.app == 'api'
+        working-directory: packages/database
+        env:
+          DATABASE_URL: "postgresql://noop:noop@localhost:5432/noop"
+          DIRECT_URL: "postgresql://noop:noop@localhost:5432/noop"
+        run: npx prisma generate
+
       - name: Type-check ${{ matrix.app }}
-        run: npm run type-check --workspace=apps/${{ matrix.app }} || true
+        run: npm run type-check --workspace=apps/${{ matrix.app }}
+
+      - name: Unit tests (Aslan webhook signature)
+        if: matrix.app == 'api'
+        run: npm test --workspace=apps/api
 
   build-web:
     name: "Build web (production)"

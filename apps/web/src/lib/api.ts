@@ -62,6 +62,21 @@ export const marketplaceApi = {
     api.get("/marketplace/models", { params: { brand } }),
 };
 
+// Cities
+export const citiesApi = {
+  getAll: () => api.get("/cities"),
+};
+
+// Payments (Aslan hosted checkout)
+export const paymentsApi = {
+  startAslanCheckout: (orderId: string) =>
+    api.post<{ checkoutUrl: string; expiresAt: string }>("/payments/aslan/checkout", { orderId }),
+  getOrderStatus: (orderId: string) =>
+    api.get<{ orderId: string; orderStatus: string; method: string; status: string; amount: number }>(
+      `/payments/order/${orderId}`
+    ),
+};
+
 // Pricing
 export const pricingApi = {
   estimate: (brandSlug: string, modelSlug: string, condition: string) =>

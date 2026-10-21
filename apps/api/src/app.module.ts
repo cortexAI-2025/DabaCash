@@ -11,6 +11,8 @@ import { MarketplaceModule } from "./marketplace/marketplace.module";
 import { PricingModule } from "./pricing/pricing.module";
 import { InventoryModule } from "./inventory/inventory.module";
 import { AdminModule } from "./admin/admin.module";
+import { CitiesModule } from "./cities/cities.module";
+import { PaymentsModule } from "./payments/payments.module";
 import { PrismaModule } from "./common/prisma/prisma.module";
 
 @Module({
@@ -28,6 +30,8 @@ import { PrismaModule } from "./common/prisma/prisma.module";
     PricingModule,
     InventoryModule,
     AdminModule,
+    CitiesModule,
+    PaymentsModule,
   ],
 })
 export class AppModule {}

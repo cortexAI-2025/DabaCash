@@ -5,7 +5,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
-import { marketplaceApi, pricingApi, buybackApi } from "@/lib/api";
+import { marketplaceApi, pricingApi, buybackApi, citiesApi } from "@/lib/api";
 import { formatPrice, CONDITION_LABELS } from "@/lib/utils";
 import { cn } from "@/lib/utils";
 import { Zap, CheckCircle, Store, Truck, AlertCircle } from "lucide-react";
@@ -17,6 +17,7 @@ const deviceSchema = z.object({
   brandSlug: z.string().min(1, "Choisissez une marque"),
   modelSlug: z.string().min(1, "Choisissez un modèle"),
   condition: z.enum(["A", "B", "C", "D"]),
+  citySlug: z.string().min(1, "Choisissez votre ville"),
   description: z.string().optional(),
   deliveryMethod: z.enum(["DROP_IN_STORE", "PICKUP_FROM_HOME"]),
 });
@@ -43,6 +44,12 @@ export function SellFlow() {
     queryFn: () => marketplaceApi.getBrands().then((r) => r.data),
   });
 
+  const { data: cities } = useQuery({
+    queryKey: ["cities"],
+    queryFn: () => citiesApi.getAll().then((r) => r.data),
+    staleTime: 60 * 60_000,
+  });
+
   const { data: models } = useQuery({
     queryKey: ["models", brandSlug],
     queryFn: () => marketplaceApi.getModels(brandSlug).then((r) => r.data),
@@ -61,6 +68,7 @@ export function SellFlow() {
     try {
       await buybackApi.create({
         deviceModelId,
+        citySlug: data.citySlug,
         condition: data.condition,
         deliveryMethod: data.deliveryMethod,
         description: data.description,
@@ -143,6 +151,17 @@ export function SellFlow() {
                 ))}
               </select>
               {errors.modelSlug && <p className="mt-1 text-xs text-red-400">{errors.modelSlug.message}</p>}
+            </div>
+
+            <div>
+              <label className="label">Ville *</label>
+              <select className="input" {...register("citySlug")}>
+                <option value="">Sélectionner votre ville</option>
+                {cities?.map((c: any) => (
+                  <option key={c.slug} value={c.slug}>{c.name}</option>
+                ))}
+              </select>
+              {errors.citySlug && <p className="mt-1 text-xs text-red-400">{errors.citySlug.message}</p>}
             </div>
 
             <div>

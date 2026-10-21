@@ -6,7 +6,8 @@
     "dev": "nest start --watch",
     "start": "node dist/main",
     "lint": "eslint src --ext .ts",
-    "type-check": "tsc --noEmit"
+    "type-check": "tsc --noEmit",
+    "test": "node -r ts-node/register --test src/payments/aslan.client.spec.ts"
   },
   "dependencies": {
     "@dabacash/database": "*",
@@ -40,6 +41,7 @@
     "@types/passport-jwt": "^4.0.1",
     "@types/passport-local": "^1.0.38",
     "@types/uuid": "^9.0.7",
-    "typescript": "^5.4.0"
+    "typescript": "^5.4.0",
+    "ts-node": "^10.9.0"
   }
 }

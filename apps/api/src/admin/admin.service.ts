@@ -1,4 +1,5 @@
 import { Injectable } from "@nestjs/common";
+import { FranchiseStatus } from "@dabacash/database";
 import { PrismaService } from "../common/prisma/prisma.service";
 
 @Injectable()
@@ -45,7 +46,7 @@ export class AdminService {
     });
   }
 
-  async updateFranchise(franchiseId: string, data: { status?: string; commissionRate?: number }) {
+  async updateFranchise(franchiseId: string, data: { status?: FranchiseStatus; commissionRate?: number }) {
     return this.prisma.franchise.update({
       where: { id: franchiseId },
       data,

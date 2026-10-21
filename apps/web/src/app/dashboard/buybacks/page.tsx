@@ -3,7 +3,7 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { buybackApi } from "@/lib/api";
 import { formatPrice, formatDate, CONDITION_LABELS } from "@/lib/utils";
-import { CheckCircle, XCircle, Loader2, AlertTriangle } from "lucide-react";
+import { CheckCircle, XCircle, Loader2, AlertTriangle, Package } from "lucide-react";
 import toast from "react-hot-toast";
 import { useState } from "react";
 

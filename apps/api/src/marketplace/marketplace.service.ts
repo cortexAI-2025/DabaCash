@@ -45,7 +45,7 @@ export class MarketplaceService {
     if (condition) where.condition = condition;
     if (minPrice) where.listingPrice = { ...where.listingPrice, gte: minPrice };
     if (maxPrice) where.listingPrice = { ...where.listingPrice, lte: maxPrice };
-    if (city) where.franchise = { city };
+    if (city) where.franchise = { cityRef: { slug: city } }; // city = slug from GET /cities
 
     const orderBy: any = {
       newest: { createdAt: "desc" },
@@ -59,7 +59,7 @@ export class MarketplaceService {
         where,
         include: {
           deviceModel: { include: { brand: true } },
-          franchise: { select: { name: true, city: true, slug: true } },
+          franchise: { select: { id: true, name: true, city: true, slug: true } },
         },
         orderBy,
         skip,

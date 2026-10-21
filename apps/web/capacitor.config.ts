@@ -4,7 +4,6 @@ const config: CapacitorConfig = {
   appId: "ma.dabacash.app",
   appName: "DabaCash",
   webDir: "out", // Next.js static export output
-  bundledWebRuntime: false,
 
   server: {
     // During local development: point to Next.js dev server
@@ -19,8 +18,7 @@ const config: CapacitorConfig = {
       keystorePath: "dabacash.keystore",
       keystoreAlias: "dabacash-key",
     },
-    minSdkVersion: 24,   // Android 7.0+
-    targetSdkVersion: 34,
+    // minSdk/targetSdk live in android/variables.gradle, not here
   },
 
   plugins: {

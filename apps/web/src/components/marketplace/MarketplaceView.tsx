@@ -1,8 +1,8 @@
 "use client";
 
 import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
-import { marketplaceApi } from "@/lib/api";
+import { useQuery, keepPreviousData } from "@tanstack/react-query";
+import { marketplaceApi, citiesApi } from "@/lib/api";
 import { ProductCard } from "./ProductCard";
 import { Search, SlidersHorizontal, Loader2, ChevronLeft, ChevronRight } from "lucide-react";
 import { DEVICE_TYPE_ICONS } from "@/lib/utils";
@@ -37,15 +37,22 @@ export function MarketplaceView() {
   const [deviceType, setDeviceType] = useState("");
   const [condition, setCondition] = useState("");
   const [sortBy, setSortBy] = useState("newest");
+  const [city, setCity] = useState("");
   const [page, setPage] = useState(1);
 
+  const { data: cities } = useQuery({
+    queryKey: ["cities"],
+    queryFn: () => citiesApi.getAll().then((r) => r.data),
+    staleTime: 60 * 60_000,
+  });
+
   const { data, isLoading } = useQuery({
-    queryKey: ["listings", debouncedSearch, deviceType, condition, sortBy, page],
+    queryKey: ["listings", debouncedSearch, deviceType, condition, sortBy, city, page],
     queryFn: () =>
       marketplaceApi
-        .getListings({ search: debouncedSearch, deviceType, condition, sortBy, page, limit: 20 })
+        .getListings({ search: debouncedSearch, deviceType, condition, sortBy, city, page, limit: 20 })
         .then((r) => r.data),
-    keepPreviousData: true,
+    placeholderData: keepPreviousData,
   });
 
   const handleSearch = (value: string) => {
@@ -107,6 +114,17 @@ export function MarketplaceView() {
           >
             {CONDITIONS.map((c) => (
               <option key={c.value} value={c.value}>{c.label}</option>
+            ))}
+          </select>
+          <select
+            className="input max-w-[180px]"
+            value={city}
+            onChange={(e) => { setCity(e.target.value); setPage(1); }}
+            aria-label="Ville"
+          >
+            <option value="">Toutes les villes</option>
+            {cities?.map((c: any) => (
+              <option key={c.slug} value={c.slug}>{c.name}</option>
             ))}
           </select>
           <select

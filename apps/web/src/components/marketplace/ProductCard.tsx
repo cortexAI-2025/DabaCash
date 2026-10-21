@@ -24,7 +24,7 @@ export function ProductCard({ listing }: ProductCardProps) {
     : null;
 
   return (
-    <Link href={`/marketplace/${listing.id}`} className="group block">
+    <Link href={`/listing?id=${listing.id}`} className="group block">
       <div className="card-hover overflow-hidden p-0">
         {/* Image */}
         <div className="relative aspect-square bg-dark-800 overflow-hidden rounded-t-2xl">

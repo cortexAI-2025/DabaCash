@@ -4,7 +4,8 @@ import { SwaggerModule, DocumentBuilder } from "@nestjs/swagger";
 import { AppModule } from "./app.module";
 
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule, { cors: true });
+  // rawBody: Aslan webhook signatures are computed over the exact request bytes
+  const app = await NestFactory.create(AppModule, { cors: true, rawBody: true });
 
   // Global prefix
   app.setGlobalPrefix("api");

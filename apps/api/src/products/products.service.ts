@@ -1,3 +1,4 @@
+import { Prisma } from "@dabacash/database";
 import { Injectable, ForbiddenException } from "@nestjs/common";
 import { PrismaService } from "../common/prisma/prisma.service";
 import { CreateListingDto, UpdateListingDto } from "./dto/product.dto";
@@ -23,7 +24,7 @@ export class ProductsService {
         originalPrice: dto.originalPrice,
         stockQuantity: dto.stockQuantity,
         images: dto.images,
-        specs: dto.specs,
+        specs: dto.specs as Prisma.InputJsonValue | undefined,
         isNegotiable: dto.isNegotiable ?? false,
         warrantyMonths: dto.warrantyMonths ?? 0,
         status: "ACTIVE",

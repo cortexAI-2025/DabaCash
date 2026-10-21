@@ -1,5 +1,6 @@
 import { PrismaClient, Role, DeviceType, Condition } from "@prisma/client";
 import * as bcrypt from "bcryptjs";
+import { MOROCCO_CITIES } from "../src/cities";
 
 const prisma = new PrismaClient();
 
@@ -53,12 +54,24 @@ async function main() {
     },
   });
 
+  // Cities
+  const cityBySlug: Record<string, string> = {};
+  for (const [position, c] of MOROCCO_CITIES.entries()) {
+    const row = await prisma.city.upsert({
+      where: { slug: c.slug },
+      update: { name: c.name, nameAr: c.nameAr, region: c.region, latitude: c.latitude, longitude: c.longitude, position },
+      create: { ...c, position },
+    });
+    cityBySlug[c.slug] = row.id;
+  }
+
   // Franchise
   const franchise = await prisma.franchise.upsert({
     where: { slug: "techcasa-casablanca" },
-    update: {},
+    update: { cityId: cityBySlug["casablanca"] },
     create: {
       ownerId: franchiseOwner.id,
+      cityId: cityBySlug["casablanca"],
       name: "TechCasa Casablanca",
       slug: "techcasa-casablanca",
       description: "Votre boutique de reconditionnement à Casablanca",
@@ -84,6 +97,41 @@ async function main() {
       },
     },
   });
+
+  // Demo franchises for the other 9 cities (no stock; owners share a dev-only password)
+  const demoHash = await bcrypt.hash("Owner@Demo2024!", 12);
+  for (const c of MOROCCO_CITIES.filter((c) => c.slug !== "casablanca")) {
+    const owner = await prisma.user.upsert({
+      where: { email: `owner.${c.slug}@dabacash.ma` },
+      update: {},
+      create: {
+        email: `owner.${c.slug}@dabacash.ma`,
+        passwordHash: demoHash,
+        firstName: "Gérant",
+        lastName: c.name,
+        role: Role.FRANCHISE_OWNER,
+        isVerified: true,
+      },
+    });
+    await prisma.franchise.upsert({
+      where: { slug: `dabacash-${c.slug}` },
+      update: { cityId: cityBySlug[c.slug] },
+      create: {
+        ownerId: owner.id,
+        cityId: cityBySlug[c.slug],
+        name: `DabaCash ${c.name}`,
+        slug: `dabacash-${c.slug}`,
+        status: "ACTIVE",
+        commissionRate: 0.15,
+        address: `Centre-ville, ${c.name}`,
+        city: c.name,
+        region: c.region,
+        country: "MA",
+        latitude: c.latitude,
+        longitude: c.longitude,
+      },
+    });
+  }
 
   // Brands
   const brands = await Promise.all([

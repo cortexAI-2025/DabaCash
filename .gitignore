@@ -23,3 +23,7 @@ local.properties
 *.aab
 apps/web/android/app/build/
 apps/web/android/.gradle/
+
+# Generated
+next-env.d.ts
+*.tsbuildinfo

@@ -10,6 +10,10 @@ export class CreateBuybackDto {
   @IsString()
   deviceModelId: string;
 
+  @ApiProperty({ example: "casablanca", description: "City slug, see GET /cities" })
+  @IsString()
+  citySlug: string;
+
   @ApiProperty({ enum: Condition })
   @IsEnum(Condition)
   condition: Condition;
