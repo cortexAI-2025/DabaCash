@@ -9,6 +9,7 @@ import { ConfigService } from "@nestjs/config";
 import { PaymentMethod, PaymentStatus, OrderStatus, Role } from "@dabacash/database";
 import { PrismaService } from "../common/prisma/prisma.service";
 import { AslanClient, AslanWebhookEvent } from "./aslan.client";
+import { recordCommission } from "../orders/commission";
 
 const SESSION_REUSE_MARGIN_MS = 60_000;
 
@@ -155,10 +156,16 @@ export class PaymentsService {
       });
       if (count === 0) return;
 
-      await tx.order.updateMany({
+      const { count: confirmed } = await tx.order.updateMany({
         where: { id: orderId, status: OrderStatus.PENDING },
         data: { status: OrderStatus.CONFIRMED },
       });
+      if (!confirmed) {
+        // Paid after the hold expired or the order was cancelled: the money is taken, so refund it.
+        this.logger.error(`Payment ${paymentId} completed on a non-pending order ${orderId}: REFUND REQUIRED`);
+        return;
+      }
+      await recordCommission(tx, orderId);
       await tx.notification.create({
         data: {
           userId,

@@ -3,7 +3,7 @@ import {
 } from "class-validator";
 import { Type } from "class-transformer";
 import { ApiProperty } from "@nestjs/swagger";
-import { DeliveryMethod, PaymentMethod } from "@dabacash/database";
+import { DeliveryMethod, OrderStatus, PaymentMethod } from "@dabacash/database";
 
 export class OrderItemDto {
   @ApiProperty()
@@ -47,7 +47,7 @@ export class CreateOrderDto {
 }
 
 export class UpdateOrderStatusDto {
-  @ApiProperty()
-  @IsString()
-  status: string;
+  @ApiProperty({ enum: OrderStatus })
+  @IsEnum(OrderStatus)
+  status: OrderStatus;
 }

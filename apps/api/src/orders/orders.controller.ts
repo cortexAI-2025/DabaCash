@@ -8,7 +8,7 @@ import { Roles } from "../common/decorators/roles.decorator";
 import { CurrentUser } from "../common/decorators/current-user.decorator";
 import { OrdersService } from "./orders.service";
 import { CreateOrderDto, UpdateOrderStatusDto } from "./dto/order.dto";
-import { Role, OrderStatus } from "@dabacash/database";
+import { Role } from "@dabacash/database";
 
 @ApiTags("orders")
 @ApiBearerAuth()
@@ -47,7 +47,11 @@ export class OrdersController {
   @Patch(":id/status")
   @Roles(Role.FRANCHISE_OWNER, Role.ADMIN)
   @ApiOperation({ summary: "Update order status" })
-  updateStatus(@Param("id") id: string, @Body() dto: UpdateOrderStatusDto) {
-    return this.orders.updateStatus(id, dto.status as OrderStatus);
+  updateStatus(
+    @Param("id") id: string,
+    @CurrentUser() user: { id: string; role: Role },
+    @Body() dto: UpdateOrderStatusDto
+  ) {
+    return this.orders.updateStatus(id, dto.status, user);
   }
 }
