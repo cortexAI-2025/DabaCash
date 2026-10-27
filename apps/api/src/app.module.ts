@@ -14,6 +14,8 @@ import { InventoryModule } from "./inventory/inventory.module";
 import { AdminModule } from "./admin/admin.module";
 import { CitiesModule } from "./cities/cities.module";
 import { PaymentsModule } from "./payments/payments.module";
+import { RealtimeModule } from "./realtime/realtime.module";
+import { NotificationsModule } from "./notifications/notifications.module";
 import { PrismaModule } from "./common/prisma/prisma.module";
 
 @Module({
@@ -34,6 +36,8 @@ import { PrismaModule } from "./common/prisma/prisma.module";
     AdminModule,
     CitiesModule,
     PaymentsModule,
+    RealtimeModule,
+    NotificationsModule,
   ],
 })
 export class AppModule {}

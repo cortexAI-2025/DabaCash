@@ -10,6 +10,7 @@ import { PaymentMethod, PaymentStatus, OrderStatus, Role } from "@dabacash/datab
 import { PrismaService } from "../common/prisma/prisma.service";
 import { AslanClient, AslanWebhookEvent } from "./aslan.client";
 import { recordCommission } from "../orders/commission";
+import { NotificationsService } from "../notifications/notifications.service";
 
 const SESSION_REUSE_MARGIN_MS = 60_000;
 
@@ -20,7 +21,8 @@ export class PaymentsService {
   constructor(
     private prisma: PrismaService,
     private aslan: AslanClient,
-    private config: ConfigService
+    private config: ConfigService,
+    private notifications: NotificationsService
   ) {}
 
   /** Creates (or reuses a still-valid) Aslan hosted checkout for an order and returns its URL. */
@@ -126,7 +128,14 @@ export class PaymentsService {
           this.logger.error(`Aslan amount mismatch on payment ${payment.id}: got ${obj.amount}`);
           return;
         }
-        await this.markPaid(payment.id, payment.orderId, payment.userId, event);
+        if (await this.markPaid(payment.id, payment.orderId, event)) {
+          await this.notifications.notify(payment.userId, {
+            title: "Paiement reçu",
+            body: "Votre paiement a bien été reçu, votre commande est confirmée.",
+            type: "order_update",
+            data: { orderId: payment.orderId },
+          });
+        }
         return;
       }
       case "payment.failed":
@@ -147,14 +156,15 @@ export class PaymentsService {
     }
   }
 
-  private async markPaid(paymentId: string, orderId: string, userId: string, event: AslanWebhookEvent) {
-    await this.prisma.$transaction(async (tx) => {
+  /** Returns true only the first time a payment is settled on a pending order. */
+  private async markPaid(paymentId: string, orderId: string, event: AslanWebhookEvent): Promise<boolean> {
+    return this.prisma.$transaction(async (tx) => {
       // Conditional update makes webhook retries/duplicates idempotent.
       const { count } = await tx.payment.updateMany({
         where: { id: paymentId, status: { not: PaymentStatus.COMPLETED } },
         data: { status: PaymentStatus.COMPLETED, paidAt: new Date(), gatewayResponse: event as any },
       });
-      if (count === 0) return;
+      if (count === 0) return false;
 
       const { count: confirmed } = await tx.order.updateMany({
         where: { id: orderId, status: OrderStatus.PENDING },
@@ -163,18 +173,10 @@ export class PaymentsService {
       if (!confirmed) {
         // Paid after the hold expired or the order was cancelled: the money is taken, so refund it.
         this.logger.error(`Payment ${paymentId} completed on a non-pending order ${orderId}: REFUND REQUIRED`);
-        return;
+        return false;
       }
       await recordCommission(tx, orderId);
-      await tx.notification.create({
-        data: {
-          userId,
-          title: "Paiement reçu",
-          body: "Votre paiement a bien été reçu, votre commande est confirmée.",
-          type: "order_update",
-          data: { orderId },
-        },
-      });
+      return true;
     });
   }
 }

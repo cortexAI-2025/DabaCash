@@ -19,6 +19,8 @@ import {
 import { PrismaService } from "../common/prisma/prisma.service";
 import { CreateOrderDto } from "./dto/order.dto";
 import { recordCommission } from "./commission";
+import { RealtimeService } from "../realtime/realtime.service";
+import { NotificationsService } from "../notifications/notifications.service";
 
 const { PENDING, CONFIRMED, IN_TRANSIT, DELIVERED, CANCELLED, REFUNDED } = OrderStatus;
 
@@ -39,11 +41,22 @@ const CASH_HOLD_MS = 48 * 60 * 60 * 1000;
 
 type OrderItemRow = { listingId: string; quantity: number };
 
+const ORDER_NOTICE: Partial<Record<OrderStatus, { title: string; body: string }>> = {
+  CONFIRMED: { title: "Commande confirmée", body: "Votre commande a été confirmée par la franchise." },
+  IN_TRANSIT: { title: "Commande en route", body: "Votre commande est en cours de livraison." },
+  DELIVERED: { title: "Commande livrée", body: "Votre commande a été remise. Merci de votre confiance !" },
+  CANCELLED: { title: "Commande annulée", body: "Votre commande a été annulée et le stock libéré." },
+};
+
 @Injectable()
 export class OrdersService {
   private readonly logger = new Logger(OrdersService.name);
 
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private realtime: RealtimeService,
+    private notifications: NotificationsService
+  ) {}
 
   async create(customerId: string, dto: CreateOrderDto) {
     if (dto.deliveryMethod === DeliveryMethod.COURIER && !dto.deliveryAddress) {
@@ -74,7 +87,7 @@ export class OrdersService {
     const byId = new Map(listings.map((l) => [l.id, l]));
     const franchiseId = listings[0].franchiseId;
 
-    return this.prisma.$transaction(async (tx) => {
+    const created = await this.prisma.$transaction(async (tx) => {
       // Lock the stock rows so two concurrent checkouts cannot both reserve the last unit.
       await this.lockInventory(tx, ids);
       const inventories = await tx.inventory.findMany({ where: { listingId: { in: ids } } });
@@ -130,6 +143,9 @@ export class OrdersService {
       }
       return order;
     });
+
+    await this.realtime.publishStock(ids);
+    return created;
   }
 
   async findByCustomer(customerId: string) {
@@ -177,7 +193,7 @@ export class OrdersService {
    * Stock is released on cancellation and consumed on delivery; commission is recorded once settled.
    */
   async updateStatus(orderId: string, next: OrderStatus, actor: { id: string; role: Role }) {
-    return this.prisma.$transaction(async (tx) => {
+    const result = await this.prisma.$transaction(async (tx) => {
       const order = await tx.order.findUnique({
         where: { id: orderId },
         include: { items: true, payment: true, franchise: { select: { ownerId: true } } },
@@ -220,11 +236,20 @@ export class OrdersService {
         if (paid || inStore) await recordCommission(tx, orderId);
       }
 
-      return tx.order.findUniqueOrThrow({
+      const updated = await tx.order.findUniqueOrThrow({
         where: { id: orderId },
         include: { items: true, payment: true },
       });
+      return { updated, customerId: order.customerId, listingIds: order.items.map((i) => i.listingId) };
     });
+
+    // After commit: listeners and the customer only ever see state that is really persisted.
+    if (next === CANCELLED || next === DELIVERED) await this.realtime.publishStock(result.listingIds);
+    const notice = ORDER_NOTICE[next];
+    if (notice) {
+      await this.notifications.notify(result.customerId, { ...notice, type: "order_update", data: { orderId } });
+    }
+    return result.updated;
   }
 
   /** Cancels unpaid orders whose hold has expired and returns their stock. */
@@ -236,7 +261,7 @@ export class OrdersService {
         createdAt: { lt: new Date(now.getTime() - ONLINE_HOLD_MS) },
         payment: { is: { status: { not: PaymentStatus.COMPLETED } } },
       },
-      select: { id: true, createdAt: true, payment: { select: { method: true } } },
+      select: { id: true, customerId: true, createdAt: true, payment: { select: { method: true } } },
     });
 
     let expired = 0;
@@ -250,15 +275,25 @@ export class OrdersService {
           where: { id: o.id, status: PENDING },
           data: { status: CANCELLED },
         });
-        if (!count) return false;
-        await this.releaseStock(tx, await tx.orderItem.findMany({ where: { orderId: o.id } }));
+        if (!count) return null;
+        const items = await tx.orderItem.findMany({ where: { orderId: o.id } });
+        await this.releaseStock(tx, items);
         await tx.payment.updateMany({
           where: { orderId: o.id, status: { in: [PaymentStatus.PENDING, PaymentStatus.PROCESSING] } },
           data: { status: PaymentStatus.FAILED },
         });
-        return true;
+        return items.map((i) => i.listingId);
       });
-      if (released) expired++;
+      if (released) {
+        expired++;
+        await this.realtime.publishStock(released);
+        await this.notifications.notify(o.customerId, {
+          title: "Commande expirée",
+          body: "Votre commande n'a pas été réglée à temps et a été annulée. Vous pouvez la repasser depuis le marketplace.",
+          type: "order_update",
+          data: { orderId: o.id },
+        });
+      }
     }
     if (expired) this.logger.log(`Expired ${expired} unpaid order(s), stock released`);
     return expired;

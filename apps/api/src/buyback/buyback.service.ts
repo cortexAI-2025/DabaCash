@@ -1,15 +1,17 @@
-import { Injectable, ForbiddenException, BadRequestException } from "@nestjs/common";
+import { Injectable, ForbiddenException, BadRequestException, ConflictException } from "@nestjs/common";
 import { PrismaService } from "../common/prisma/prisma.service";
 import { PricingService } from "../pricing/pricing.service";
 import { CreateBuybackDto, ReviewBuybackDto } from "./dto/buyback.dto";
 import { BuybackStatus, DeliveryMethod } from "@dabacash/database";
 import { haversineKm } from "../common/geo";
+import { NotificationsService } from "../notifications/notifications.service";
 
 @Injectable()
 export class BuybackService {
   constructor(
     private prisma: PrismaService,
-    private pricing: PricingService
+    private pricing: PricingService,
+    private notifications: NotificationsService
   ) {}
 
   async create(customerId: string, dto: CreateBuybackDto) {
@@ -127,18 +129,37 @@ export class BuybackService {
       throw new ForbiddenException("Not your franchise");
     }
 
+    // A decision is final: re-reviewing an accepted/rejected request would let a franchise
+    // change the price the customer already agreed to.
+    if (request.status !== BuybackStatus.PENDING && request.status !== BuybackStatus.UNDER_REVIEW) {
+      throw new ConflictException("Cette demande a déjà été traitée");
+    }
+
     const newStatus =
       dto.decision === "ACCEPTED" ? BuybackStatus.ACCEPTED : BuybackStatus.REJECTED;
+    const finalPrice = dto.finalBuybackPrice ?? request.estimatedBuybackPrice;
 
-    return this.prisma.buybackRequest.update({
+    const updated = await this.prisma.buybackRequest.update({
       where: { id: requestId },
       data: {
         status: newStatus,
-        finalBuybackPrice: dto.finalBuybackPrice ?? request.estimatedBuybackPrice,
+        finalBuybackPrice: finalPrice,
         franchiseNotes: dto.franchiseNotes,
         completedAt: newStatus === BuybackStatus.ACCEPTED ? new Date() : null,
       },
     });
+
+    await this.notifications.notify(request.customerId, {
+      title: newStatus === BuybackStatus.ACCEPTED ? "Rachat accepté" : "Rachat refusé",
+      body:
+        newStatus === BuybackStatus.ACCEPTED
+          ? `${request.franchise?.name ?? "La franchise"} accepte votre appareil pour ${Math.round(finalPrice ?? 0)} MAD.`
+          : `${request.franchise?.name ?? "La franchise"} ne peut pas racheter votre appareil.${dto.franchiseNotes ? ` Motif : ${dto.franchiseNotes}` : ""}`,
+      type: "buyback_update",
+      data: { buybackId: requestId },
+    });
+
+    return updated;
   }
 
   async findById(id: string) {
