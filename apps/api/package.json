@@ -7,7 +7,7 @@
     "start": "node dist/main",
     "lint": "eslint src --ext .ts",
     "type-check": "tsc --noEmit",
-    "test": "node -r ts-node/register --test src/payments/aslan.client.spec.ts src/notifications/notifications.service.spec.ts"
+    "test": "node -r ts-node/register --test src/payments/aslan.client.spec.ts src/notifications/notifications.service.spec.ts src/pricing/fraud.spec.ts"
   },
   "dependencies": {
     "@dabacash/database": "*",

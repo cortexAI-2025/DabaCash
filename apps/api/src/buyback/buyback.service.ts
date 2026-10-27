@@ -5,6 +5,7 @@ import { CreateBuybackDto, ReviewBuybackDto } from "./dto/buyback.dto";
 import { BuybackStatus, DeliveryMethod } from "@dabacash/database";
 import { haversineKm } from "../common/geo";
 import { NotificationsService } from "../notifications/notifications.service";
+import { FLAG_THRESHOLD, scoreFraud } from "../pricing/fraud";
 
 @Injectable()
 export class BuybackService {
@@ -21,10 +22,7 @@ export class BuybackService {
       condition: dto.condition,
     });
 
-    const fraudScore = this.pricing.computeFraudScore({
-      claimedCondition: dto.condition,
-      claimedAge: 0, // TODO: derive from model release year
-    });
+    const fraud = await this.assessFraud(customerId, dto, estimate.buybackPrice);
 
     const city = await this.prisma.city.findUnique({ where: { slug: dto.citySlug } });
     if (!city || !city.isActive) throw new BadRequestException(`Unknown city: ${dto.citySlug}`);
@@ -47,13 +45,47 @@ export class BuybackService {
         estimatedBuybackPrice: estimate.buybackPrice,
         estimatedResaleMin: estimate.resaleMin,
         estimatedResaleMax: estimate.resaleMax,
-        fraudScore,
-        isFlagged: fraudScore > 0.5,
+        fraudScore: fraud.score,
+        fraudReasons: fraud.reasons,
+        isFlagged: fraud.score >= FLAG_THRESHOLD,
       },
       include: {
         model: { include: { brand: true } },
         franchise: { select: { name: true, city: true } },
       },
+    });
+  }
+
+  private async assessFraud(customerId: string, dto: CreateBuybackDto, estimatedPrice: number) {
+    const [model, customer, recent, imeiClash] = await Promise.all([
+      this.prisma.deviceModel.findUniqueOrThrow({
+        where: { id: dto.deviceModelId },
+        select: { releaseYear: true, deviceType: true },
+      }),
+      this.prisma.user.findUniqueOrThrow({ where: { id: customerId }, select: { createdAt: true } }),
+      this.prisma.buybackRequest.count({
+        where: { customerId, createdAt: { gte: new Date(Date.now() - 24 * 3600_000) } },
+      }),
+      dto.imei
+        ? this.prisma.buybackRequest.count({
+            where: {
+              imei: dto.imei.trim(),
+              status: { in: [BuybackStatus.PENDING, BuybackStatus.UNDER_REVIEW, BuybackStatus.ACCEPTED, BuybackStatus.COMPLETED] },
+              OR: [{ fraudResolution: null }, { fraudResolution: { not: "CONFIRMED_FRAUD" } }],
+            },
+          })
+        : Promise.resolve(0),
+    ]);
+
+    return scoreFraud({
+      condition: dto.condition,
+      deviceType: model.deviceType,
+      ageYears: model.releaseYear ? new Date().getFullYear() - model.releaseYear : null,
+      imei: dto.imei,
+      imeiSeenElsewhere: imeiClash > 0,
+      requestsLast24h: recent + 1,
+      accountAgeHours: (Date.now() - customer.createdAt.getTime()) / 3600_000,
+      estimatedPrice,
     });
   }
 
@@ -127,6 +159,11 @@ export class BuybackService {
 
     if (request.franchise?.ownerId !== franchiseOwnerId) {
       throw new ForbiddenException("Not your franchise");
+    }
+
+    // A flagged request is the admin's to clear first: a franchise must not price a suspect device.
+    if (request.isFlagged && !request.fraudResolution) {
+      throw new ConflictException("Demande en cours de vérification antifraude");
     }
 
     // A decision is final: re-reviewing an accepted/rejected request would let a franchise

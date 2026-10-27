@@ -101,16 +101,4 @@ export class PricingService {
     const estimate = await this.estimate({ deviceModelId: model.id, condition: params.condition });
     return { ...estimate, modelName: model.name, brandName: model.brand.name };
   }
-
-  // Fraud detection: flag if too high a price is claimed
-  computeFraudScore(params: {
-    claimedCondition: Condition;
-    claimedAge: number;
-    imei?: string;
-  }): number {
-    let score = 0;
-    if (params.claimedCondition === "A" && params.claimedAge > 3) score += 0.3;
-    if (params.claimedAge < 0 || params.claimedAge > 10) score += 0.4;
-    return Math.min(score, 1);
-  }
 }

@@ -81,6 +81,11 @@ enum ListingStatus {
   RESERVED
 }
 
+enum FraudResolution {
+  CLEARED          // admin reviewed the flag: legitimate request
+  CONFIRMED_FRAUD  // admin confirmed: request is cancelled
+}
+
 enum FranchiseStatus {
   PENDING
   ACTIVE
@@ -108,6 +113,7 @@ model User {
   // Relations
   franchise       Franchise?
   buybackRequests BuybackRequest[]
+  fraudReviews    BuybackRequest[]  @relation("FraudReviewer")
   orders          Order[]           @relation("CustomerOrders")
   payments        Payment[]
   sessions        Session[]
@@ -310,6 +316,11 @@ model BuybackRequest {
   // Fraud detection
   fraudScore      Float?        // 0–1 (0 = clean, 1 = high risk)
   isFlagged       Boolean       @default(false)
+  fraudReasons    Json?         // string[]: why the scoring flagged it
+  fraudResolution FraudResolution?
+  fraudNote       String?
+  fraudReviewedAt DateTime?
+  fraudReviewedById String?
 
   // Scheduling
   preferredDate   DateTime?
@@ -322,12 +333,15 @@ model BuybackRequest {
   customer  User         @relation(fields: [customerId], references: [id])
   franchise Franchise?   @relation(fields: [franchiseId], references: [id])
   city      City?        @relation(fields: [cityId], references: [id])
+  fraudReviewer User?    @relation("FraudReviewer", fields: [fraudReviewedById], references: [id])
   model     DeviceModel  @relation(fields: [deviceModelId], references: [id])
   order     Order?
 
   @@index([customerId])
   @@index([franchiseId])
   @@index([status])
+  @@index([isFlagged, fraudResolution])
+  @@index([imei])
   @@map("buyback_requests")
 }
 
