@@ -1,8 +1,10 @@
 {
   "name": "@dabacash/database",
   "version": "1.0.0",
-  "main": "./src/index.ts",
+  "main": "./dist/index.js",
   "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "postinstall": "prisma generate",
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate deploy",
     "db:migrate:dev": "prisma migrate dev",
@@ -18,5 +20,10 @@
     "ts-node": "^10.9.0",
     "typescript": "^5.4.0",
     "@types/bcryptjs": "^2.4.6"
-  }
+  },
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist",
+    "prisma"
+  ]
 }
