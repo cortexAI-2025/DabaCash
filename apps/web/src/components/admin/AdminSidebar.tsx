@@ -4,7 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
   LayoutDashboard, Store, ShoppingBag, AlertTriangle,
-  BarChart3, Settings, LogOut, Zap, Users
+  LogOut, Zap
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { clearAuthTokens } from "@/lib/auth";
@@ -15,7 +15,6 @@ const navItems = [
   { href: "/admin/franchises", icon: Store, label: "Franchises" },
   { href: "/admin/orders", icon: ShoppingBag, label: "Commandes" },
   { href: "/admin/fraud", icon: AlertTriangle, label: "Fraude" },
-  { href: "/admin/analytics", icon: BarChart3, label: "Analytics" },
 ];
 
 export function AdminSidebar() {

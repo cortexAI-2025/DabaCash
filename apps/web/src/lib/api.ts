@@ -1,5 +1,5 @@
 import axios from "axios";
-import Cookies from "js-cookie";
+import { clearAuthTokens, getAccessToken, getRefreshToken, setAuthTokens, type UserRole } from "./auth";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
 
@@ -8,8 +8,32 @@ export const api = axios.create({
   headers: { "Content-Type": "application/json" },
 });
 
+// Single in-flight refresh: parallel 401s share one rotation instead of racing on the refresh token.
+let refreshing: Promise<string> | null = null;
+
+function refreshSession(): Promise<string> {
+  if (!refreshing) {
+    const refreshToken = getRefreshToken();
+    if (!refreshToken) return Promise.reject(new Error("no refresh token"));
+    refreshing = axios
+      .post<{ accessToken: string; refreshToken: string; role: UserRole }>(
+        `${API_URL}/api/v1/auth/refresh`,
+        { refreshToken }
+      )
+      .then(({ data }) => {
+        // The server rotates the refresh token on every call: the old one is now invalid.
+        setAuthTokens(data.accessToken, data.refreshToken, data.role);
+        return data.accessToken;
+      })
+      .finally(() => {
+        refreshing = null;
+      });
+  }
+  return refreshing;
+}
+
 api.interceptors.request.use((config) => {
-  const token = Cookies.get("access_token") ?? (typeof window !== "undefined" ? localStorage.getItem("access_token") : null);
+  const token = getAccessToken();
   if (token) config.headers.Authorization = `Bearer ${token}`;
   return config;
 });
@@ -18,23 +42,19 @@ api.interceptors.response.use(
   (res) => res,
   async (err) => {
     const original = err.config;
-    if (err.response?.status === 401 && !original._retry) {
-      original._retry = true;
-      const refreshToken = Cookies.get("refresh_token");
-      if (refreshToken) {
-        try {
-          const { data } = await axios.post(`${API_URL}/api/v1/auth/refresh`, { refreshToken });
-          Cookies.set("access_token", data.accessToken, { expires: 1 / 96 }); // 15min
-          original.headers.Authorization = `Bearer ${data.accessToken}`;
-          return api(original);
-        } catch {
-          Cookies.remove("access_token");
-          Cookies.remove("refresh_token");
-          window.location.href = "/login";
-        }
+    if (err.response?.status !== 401 || original._retry) return Promise.reject(err);
+    original._retry = true;
+    try {
+      const accessToken = await refreshSession();
+      original.headers.Authorization = `Bearer ${accessToken}`;
+      return api(original);
+    } catch {
+      clearAuthTokens();
+      if (typeof window !== "undefined" && !window.location.pathname.startsWith("/login")) {
+        window.location.href = `/login?next=${encodeURIComponent(window.location.pathname)}`;
       }
+      return Promise.reject(err);
     }
-    return Promise.reject(err);
   }
 );
 

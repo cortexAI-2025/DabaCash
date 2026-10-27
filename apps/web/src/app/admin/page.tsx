@@ -63,8 +63,8 @@ export default function AdminPage() {
             <AlertTriangle className="h-4 w-4 text-red-400" />
             Voir les signalements ({stats?.flaggedBuybacks ?? 0})
           </a>
-          <a href="/admin/analytics" className="btn-secondary py-2 px-4 text-sm">
-            Analytics avancées
+          <a href="/admin/orders" className="btn-secondary py-2 px-4 text-sm">
+            Toutes les commandes
           </a>
         </div>
       </div>

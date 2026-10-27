@@ -7,7 +7,7 @@ import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { authApi } from "@/lib/api";
-import { setAuthTokens, getRoleRedirect } from "@/lib/auth";
+import { setAuthTokens, getRoleRedirect, type UserRole } from "@/lib/auth";
 import { Zap, Loader2 } from "lucide-react";
 import toast from "react-hot-toast";
 
@@ -43,7 +43,7 @@ export default function RegisterPage() {
         phone: data.phone,
         password: data.password,
       });
-      setAuthTokens(auth.accessToken, auth.refreshToken);
+      setAuthTokens(auth.accessToken, auth.refreshToken, auth.role as UserRole);
       toast.success("Compte créé avec succès !");
       router.push(getRoleRedirect(auth.role as any));
     } catch (err: any) {

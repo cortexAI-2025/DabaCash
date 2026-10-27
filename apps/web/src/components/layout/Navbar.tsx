@@ -10,6 +10,7 @@ const navLinks = [
   { href: "/marketplace", label: "Marketplace" },
   { href: "/sell", label: "Vendre" },
   { href: "/franchises", label: "Franchises" },
+  { href: "/orders", label: "Mes commandes" },
 ];
 
 export function Navbar() {

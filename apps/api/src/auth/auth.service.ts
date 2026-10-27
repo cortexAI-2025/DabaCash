@@ -1,3 +1,4 @@
+import { randomUUID } from "crypto";
 import {
   Injectable,
   ConflictException,
@@ -81,7 +82,9 @@ export class AuthService {
     const payload = { sub: user.id, email: user.email, role: user.role };
 
     const accessToken = this.jwt.sign(payload);
-    const refreshToken = this.jwt.sign(payload, {
+    // jti makes every refresh token unique: two tokens issued in the same second must not collide,
+    // or a rotated-out token would still match the new session.
+    const refreshToken = this.jwt.sign({ ...payload, jti: randomUUID() }, {
       secret: this.config.get("JWT_REFRESH_SECRET"),
       expiresIn: this.config.get("JWT_REFRESH_EXPIRES_IN", "7d"),
     });

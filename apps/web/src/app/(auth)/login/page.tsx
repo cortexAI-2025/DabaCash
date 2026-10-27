@@ -7,7 +7,7 @@ import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { authApi } from "@/lib/api";
-import { setAuthTokens, getRoleRedirect } from "@/lib/auth";
+import { setAuthTokens, getRoleRedirect, type UserRole } from "@/lib/auth";
 import { Zap, Eye, EyeOff, Loader2 } from "lucide-react";
 import toast from "react-hot-toast";
 
@@ -17,6 +17,12 @@ const schema = z.object({
 });
 
 type FormData = z.infer<typeof schema>;
+
+// Only same-site relative paths: never redirect to an external URL taken from the query string.
+function safeNext(): string | null {
+  const next = new URLSearchParams(window.location.search).get("next");
+  return next && next.startsWith("/") && !next.startsWith("//") ? next : null;
+}
 
 export default function LoginPage() {
   const router = useRouter();
@@ -31,9 +37,9 @@ export default function LoginPage() {
     setLoading(true);
     try {
       const { data: auth } = await authApi.login(data.email, data.password);
-      setAuthTokens(auth.accessToken, auth.refreshToken);
+      setAuthTokens(auth.accessToken, auth.refreshToken, auth.role as UserRole);
       toast.success("Connexion réussie !");
-      router.push(getRoleRedirect(auth.role as any));
+      router.push(safeNext() ?? getRoleRedirect(auth.role as UserRole));
     } catch (err: any) {
       toast.error(err.response?.data?.message ?? "Email ou mot de passe incorrect");
     } finally {
