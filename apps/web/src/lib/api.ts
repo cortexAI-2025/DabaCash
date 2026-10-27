@@ -148,7 +148,11 @@ export const adminApi = {
   getStats: () => api.get("/admin/stats"),
   getFranchises: () => api.get("/admin/franchises"),
   updateFranchise: (id: string, data: unknown) => api.patch(`/admin/franchises/${id}`, data),
-  getFlagged: () => api.get("/admin/fraud/flagged"),
+  getFlagged: (status: "open" | "resolved" | "all" = "open") =>
+    api.get("/admin/fraud/flagged", { params: { status } }),
+  resolveFraud: (id: string, data: { resolution: "CLEARED" | "CONFIRMED_FRAUD"; note?: string }) =>
+    api.patch(`/admin/fraud/${id}/resolve`, data),
+  getAnalytics: (days: number) => api.get("/admin/analytics", { params: { days } }),
   getOrders: () => api.get("/admin/orders"),
 };
 

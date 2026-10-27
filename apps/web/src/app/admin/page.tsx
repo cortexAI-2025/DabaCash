@@ -66,6 +66,9 @@ export default function AdminPage() {
           <a href="/admin/orders" className="btn-secondary py-2 px-4 text-sm">
             Toutes les commandes
           </a>
+          <a href="/admin/analytics" className="btn-secondary py-2 px-4 text-sm">
+            Analytics
+          </a>
         </div>
       </div>
     </div>
