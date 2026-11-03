@@ -56,12 +56,12 @@ export function PaymentResult() {
   }
 
   const view = (() => {
+    if (data.method === "CASH" && data.status !== "COMPLETED")
+      return { Icon: CheckCircle, tone: "text-emerald-400", title: "Commande enregistrée", text: "Réglez en espèces lors du retrait en franchise." };
     if (data.status === "COMPLETED")
       return { Icon: CheckCircle, tone: "text-emerald-400", title: "Paiement confirmé", text: `Merci ! Votre paiement de ${formatPrice(data.amount)} a bien été reçu.` };
     if (data.status === "PROCESSING")
       return { Icon: Clock, tone: "text-gold-400", title: "En attente de votre paiement cash", text: "Présentez le code de référence chez l'agent partenaire. Votre commande sera confirmée dès réception." };
-    if (data.method === "CASH")
-      return { Icon: CheckCircle, tone: "text-emerald-400", title: "Commande enregistrée", text: "Réglez en espèces lors du retrait en franchise." };
     if (data.status === "FAILED" || returned === "cancel")
       return { Icon: XCircle, tone: "text-red-400", title: "Paiement non abouti", text: "Aucun montant n'a été débité. Vous pouvez réessayer." };
     return { Icon: Clock, tone: "text-gold-400", title: "Confirmation en cours…", text: "Nous attendons la confirmation de la banque, cela peut prendre quelques instants." };

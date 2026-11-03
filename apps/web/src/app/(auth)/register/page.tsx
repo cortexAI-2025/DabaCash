@@ -17,7 +17,7 @@ const schema = z.object({
   firstName: z.string().min(2, "Prénom requis"),
   lastName: z.string().min(2, "Nom requis"),
   email: z.string().email("Email invalide"),
-  phone: z.string().trim().optional(),
+  phone: z.string().trim().regex(/^(\+?[0-9 ]{8,16})?$/, "Numéro de téléphone invalide").optional(),
   password: z.string().min(10, "Minimum 10 caractères").max(72, "72 caractères maximum")
     .regex(/[A-Za-z]/, "Au moins une lettre").regex(/\d/, "Au moins un chiffre"),
   confirmPassword: z.string(),
@@ -43,7 +43,7 @@ export default function RegisterPage() {
         firstName: data.firstName,
         lastName: data.lastName,
         email: data.email,
-        phone: data.phone,
+        ...(data.phone ? { phone: data.phone } : {}),
         password: data.password,
       });
       setAuthTokens(auth.accessToken, auth.refreshToken, auth.role as UserRole);

@@ -138,20 +138,20 @@ export function SellFlow() {
       </div>
 
       {/* Step indicator */}
-      <div className="flex items-center mb-10">
+      <div className="mb-10 flex items-center" role="list" aria-label="Étapes">
         {steps.map((s, i) => (
-          <div key={s} className="flex items-center">
+          <div key={s} role="listitem" aria-current={i === step ? "step" : undefined} className="flex items-center">
             <div className={cn(
               "flex h-8 w-8 items-center justify-center rounded-full text-sm font-bold transition-all",
               i <= step ? "bg-gold-500 text-dark-950" : "bg-dark-800 text-dark-500"
             )}>
               {i + 1}
             </div>
-            <span className={cn("ml-2 text-sm font-medium", i === step ? "text-dark-100" : "text-dark-500")}>
+            <span className={cn("ml-2 text-sm font-medium", i === step ? "text-dark-100" : "hidden text-dark-500 sm:inline")}>
               {s}
             </span>
             {i < steps.length - 1 && (
-              <div className={cn("mx-4 h-0.5 w-12", i < step ? "bg-gold-500" : "bg-dark-800")} />
+              <div className={cn("mx-2 h-0.5 w-6 sm:mx-4 sm:w-12", i < step ? "bg-gold-500" : "bg-dark-800")} />
             )}
           </div>
         ))}
