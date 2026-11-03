@@ -17,3 +17,5 @@ if (process.env.NODE_ENV !== "production") globalForPrisma.prisma = prisma;
 
 export * from "@prisma/client";
 export * from "./cities";
+export * from "./catalog";
+export * from "./seed";

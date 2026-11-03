@@ -8,8 +8,11 @@
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate deploy",
     "db:migrate:dev": "prisma migrate dev",
-    "db:seed": "ts-node prisma/seed.ts",
-    "db:studio": "prisma studio"
+    "db:seed": "ts-node prisma/seed-reference.ts",
+    "db:studio": "prisma studio",
+    "db:seed:demo": "ts-node prisma/seed-demo.ts",
+    "db:create-admin": "ts-node prisma/create-admin.ts",
+    "type-check": "tsc -p tsconfig.check.json"
   },
   "dependencies": {
     "@prisma/client": "^5.14.0",
@@ -24,6 +27,7 @@
   "types": "./dist/index.d.ts",
   "files": [
     "dist",
-    "prisma"
+    "prisma/schema.prisma",
+    "prisma/migrations"
   ]
 }
