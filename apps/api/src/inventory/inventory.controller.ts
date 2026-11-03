@@ -1,4 +1,5 @@
-import { Controller, Get, UseGuards } from "@nestjs/common";
+import { Controller, Get, Query, UseGuards } from "@nestjs/common";
+import { PaginationQueryDto } from "../common/pagination";
 import { ApiTags, ApiOperation, ApiBearerAuth } from "@nestjs/swagger";
 import { JwtAuthGuard } from "../common/guards/jwt-auth.guard";
 import { RolesGuard } from "../common/guards/roles.guard";
@@ -10,15 +11,15 @@ import { Role } from "@dabacash/database";
 @ApiTags("inventory")
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard, RolesGuard)
-@Roles(Role.FRANCHISE_OWNER, Role.ADMIN)
+@Roles(Role.FRANCHISE_OWNER)
 @Controller({ path: "inventory", version: "1" })
 export class InventoryController {
   constructor(private inventory: InventoryService) {}
 
   @Get()
   @ApiOperation({ summary: "Get full inventory for my franchise" })
-  getInventory(@CurrentUser() user: { id: string }) {
-    return this.inventory.getForFranchise(user.id);
+  getInventory(@CurrentUser() user: { id: string }, @Query() q: PaginationQueryDto) {
+    return this.inventory.getForFranchise(user.id, q);
   }
 
   @Get("summary")

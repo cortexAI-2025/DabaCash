@@ -1,141 +1,125 @@
-import { Injectable } from "@nestjs/common";
+import { BadRequestException, Injectable, Logger, NotFoundException } from "@nestjs/common";
+import { ListingStatus, Prisma } from "@dabacash/database";
+import { paginated, skipTake } from "../common/pagination";
 import { PrismaService } from "../common/prisma/prisma.service";
-import { Condition, DeviceType, ListingStatus } from "@dabacash/database";
+import { ListingsQueryDto } from "./dto/marketplace.dto";
 
-export interface MarketplaceFilters {
-  search?: string;
-  brand?: string;
-  deviceType?: DeviceType;
-  condition?: Condition;
-  minPrice?: number;
-  maxPrice?: number;
-  city?: string;
-  page?: number;
-  limit?: number;
-  sortBy?: "price_asc" | "price_desc" | "newest" | "popular";
-}
+// A listing is public only while it is for sale AND its franchise is in good standing.
+// Suspended or closed franchises disappear from the marketplace immediately.
+const PUBLIC_FRANCHISE: Prisma.FranchiseWhereInput = { status: "ACTIVE" };
+
+// What a shopper may see. Deliberately a select, not an include: a new column added to the table
+// must not become public by accident. Never exposed: buybackPrice (the franchise's margin),
+// the model's market baseline, view counters.
+const PUBLIC_MODEL = { select: { name: true, slug: true, deviceType: true, releaseYear: true, brand: { select: { name: true, slug: true } } } } as const;
+const PUBLIC_LISTING = {
+  id: true, title: true, description: true, condition: true, status: true, listingPrice: true, originalPrice: true,
+  stockQuantity: true, images: true, warrantyMonths: true, isNegotiable: true, createdAt: true,
+} as const;
+const CARD = {
+  ...PUBLIC_LISTING,
+  deviceModel: PUBLIC_MODEL,
+  franchise: { select: { id: true, name: true, city: true, slug: true } },
+} satisfies Prisma.ProductListingSelect;
 
 @Injectable()
 export class MarketplaceService {
+  private readonly logger = new Logger(MarketplaceService.name);
+
   constructor(private prisma: PrismaService) {}
 
-  async getListings(filters: MarketplaceFilters) {
-    const {
-      search, brand, deviceType, condition, minPrice, maxPrice,
-      city, page = 1, limit = 20, sortBy = "newest"
-    } = filters;
-
-    const skip = (page - 1) * limit;
-
-    const where: any = {
-      status: ListingStatus.ACTIVE,
-      stockQuantity: { gt: 0 },
-    };
-
-    if (search) {
-      where.OR = [
-        { title: { contains: search, mode: "insensitive" } },
-        { deviceModel: { name: { contains: search, mode: "insensitive" } } },
-        { deviceModel: { brand: { name: { contains: search, mode: "insensitive" } } } },
-      ];
+  async getListings(q: ListingsQueryDto) {
+    if (q.minPrice !== undefined && q.maxPrice !== undefined && q.minPrice > q.maxPrice) {
+      throw new BadRequestException("minPrice doit être inférieur ou égal à maxPrice");
     }
 
-    if (brand) where.deviceModel = { ...where.deviceModel, brand: { slug: brand } };
-    if (deviceType) where.deviceModel = { ...where.deviceModel, deviceType };
-    if (condition) where.condition = condition;
-    if (minPrice) where.listingPrice = { ...where.listingPrice, gte: minPrice };
-    if (maxPrice) where.listingPrice = { ...where.listingPrice, lte: maxPrice };
-    if (city) where.franchise = { cityRef: { slug: city } }; // city = slug from GET /cities
+    const where: Prisma.ProductListingWhereInput = {
+      status: ListingStatus.ACTIVE,
+      stockQuantity: { gt: 0 },
+      franchise: { ...PUBLIC_FRANCHISE, ...(q.city && { cityRef: { slug: q.city } }) },
+      ...(q.condition && { condition: q.condition }),
+      ...((q.minPrice !== undefined || q.maxPrice !== undefined) && {
+        listingPrice: { ...(q.minPrice !== undefined && { gte: q.minPrice }), ...(q.maxPrice !== undefined && { lte: q.maxPrice }) },
+      }),
+      ...((q.brand || q.deviceType) && {
+        deviceModel: { ...(q.brand && { brand: { slug: q.brand } }), ...(q.deviceType && { deviceType: q.deviceType }) },
+      }),
+      ...(q.search && {
+        OR: [
+          { title: { contains: q.search, mode: "insensitive" } },
+          { deviceModel: { name: { contains: q.search, mode: "insensitive" } } },
+          { deviceModel: { brand: { name: { contains: q.search, mode: "insensitive" } } } },
+        ],
+      }),
+    };
 
-    const orderBy: any = {
-      newest: { createdAt: "desc" },
-      popular: { viewCount: "desc" },
-      price_asc: { listingPrice: "asc" },
-      price_desc: { listingPrice: "desc" },
-    }[sortBy] ?? { createdAt: "desc" };
+    const orderBy: Prisma.ProductListingOrderByWithRelationInput = {
+      newest: { createdAt: "desc" as const },
+      popular: { viewCount: "desc" as const },
+      price_asc: { listingPrice: "asc" as const },
+      price_desc: { listingPrice: "desc" as const },
+    }[q.sortBy];
 
     const [items, total] = await Promise.all([
-      this.prisma.productListing.findMany({
-        where,
-        include: {
-          deviceModel: { include: { brand: true } },
-          franchise: { select: { id: true, name: true, city: true, slug: true } },
-        },
-        orderBy,
-        skip,
-        take: limit,
-      }),
+      this.prisma.productListing.findMany({ where, select: CARD, orderBy: [orderBy, { id: "asc" }], ...skipTake(q.page, q.limit) }),
       this.prisma.productListing.count({ where }),
     ]);
-
-    return {
-      items,
-      pagination: {
-        page,
-        limit,
-        total,
-        totalPages: Math.ceil(total / limit),
-        hasNext: page * limit < total,
-      },
-    };
+    return paginated(items, total, q.page, q.limit);
   }
 
   async getListingById(id: string) {
-    const listing = await this.prisma.productListing.findUniqueOrThrow({
-      where: { id },
-      include: {
-        deviceModel: { include: { brand: true } },
+    const listing = await this.prisma.productListing.findFirst({
+      where: { id, status: { in: [ListingStatus.ACTIVE, ListingStatus.SOLD] }, franchise: PUBLIC_FRANCHISE },
+      select: {
+        ...PUBLIC_LISTING,
+        deviceModel: PUBLIC_MODEL,
         franchise: {
-          select: {
-            name: true,
-            city: true,
-            region: true,
-            slug: true,
-            phoneNumber: true,
-            whatsappNumber: true,
-            latitude: true,
-            longitude: true,
-          },
+          select: { name: true, city: true, region: true, slug: true, phoneNumber: true, whatsappNumber: true, latitude: true, longitude: true },
         },
       },
     });
+    if (!listing) throw new NotFoundException("Annonce introuvable");
 
-    // Increment view count
-    await this.prisma.productListing.update({
-      where: { id },
-      data: { viewCount: { increment: 1 } },
-    });
-
+    // Best effort: a failed counter update must never fail a page view.
+    this.prisma.productListing
+      .update({ where: { id }, data: { viewCount: { increment: 1 } } })
+      .catch((err) => this.logger.warn(`viewCount update failed: ${err.message}`));
     return listing;
   }
 
-  async getFeaturedListings() {
+  getFeaturedListings() {
     return this.prisma.productListing.findMany({
-      where: { status: ListingStatus.ACTIVE, stockQuantity: { gt: 0 } },
-      include: {
-        deviceModel: { include: { brand: true } },
-        franchise: { select: { name: true, city: true } },
-      },
-      orderBy: { viewCount: "desc" },
+      where: { status: ListingStatus.ACTIVE, stockQuantity: { gt: 0 }, franchise: PUBLIC_FRANCHISE },
+      select: CARD,
+      orderBy: [{ viewCount: "desc" }, { id: "asc" }],
       take: 8,
     });
   }
 
-  async getBrands() {
+  getBrands() {
     return this.prisma.brand.findMany({
       where: { isActive: true },
+      select: { id: true, name: true, slug: true, logoUrl: true },
       orderBy: { name: "asc" },
     });
   }
 
-  async getDeviceModels(brandSlug?: string) {
+  getDeviceModels(brandSlug?: string) {
     return this.prisma.deviceModel.findMany({
-      where: {
-        isActive: true,
-        ...(brandSlug && { brand: { slug: brandSlug } }),
-      },
-      include: { brand: { select: { name: true, slug: true } } },
+      where: { isActive: true, baseMarketPrice: { gt: 0 }, ...(brandSlug && { brand: { slug: brandSlug } }) },
+      select: { id: true, name: true, slug: true, deviceType: true, releaseYear: true, brand: { select: { name: true, slug: true } } },
       orderBy: { name: "asc" },
     });
+  }
+
+  /** Real figures for the public home page, replacing marketing placeholders. */
+  async getPublicStats() {
+    const [franchises, cities, listings, sold] = await Promise.all([
+      this.prisma.franchise.count({ where: { status: "ACTIVE" } }),
+      this.prisma.city.count({ where: { isActive: true, franchises: { some: { status: "ACTIVE" } } } }),
+      this.prisma.productListing.count({ where: { status: ListingStatus.ACTIVE, stockQuantity: { gt: 0 }, franchise: PUBLIC_FRANCHISE } }),
+      this.prisma.orderItem.aggregate({ where: { order: { status: "DELIVERED" } }, _sum: { quantity: true } }),
+    ]);
+    return { franchises, cities, listings, devicesSold: sold._sum.quantity ?? 0 };
   }
 }

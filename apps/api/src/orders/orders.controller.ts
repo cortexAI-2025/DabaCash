@@ -1,14 +1,15 @@
-import {
-  Controller, Get, Post, Patch, Param, Body, UseGuards
-} from "@nestjs/common";
-import { ApiTags, ApiOperation, ApiBearerAuth } from "@nestjs/swagger";
+import { BadRequestException, Body, Controller, Get, HttpCode, HttpStatus, Param, Patch, Post, Query, UseGuards, Headers } from "@nestjs/common";
+import { ApiBearerAuth, ApiHeader, ApiOperation, ApiTags } from "@nestjs/swagger";
+import { Role } from "@dabacash/database";
+import { CurrentUser } from "../common/decorators/current-user.decorator";
+import { Roles } from "../common/decorators/roles.decorator";
 import { JwtAuthGuard } from "../common/guards/jwt-auth.guard";
 import { RolesGuard } from "../common/guards/roles.guard";
-import { Roles } from "../common/decorators/roles.decorator";
-import { CurrentUser } from "../common/decorators/current-user.decorator";
+import { CreateOrderDto, OrderListQueryDto, UpdateOrderStatusDto } from "./dto/order.dto";
 import { OrdersService } from "./orders.service";
-import { CreateOrderDto, UpdateOrderStatusDto } from "./dto/order.dto";
-import { Role } from "@dabacash/database";
+
+type Me = { id: string; role: Role };
+const KEY = /^[A-Za-z0-9_-]{8,100}$/;
 
 @ApiTags("orders")
 @ApiBearerAuth()
@@ -19,39 +20,45 @@ export class OrdersController {
 
   @Post()
   @Roles(Role.CUSTOMER)
+  @ApiHeader({ name: "Idempotency-Key", required: false, description: "Retrying with the same key returns the original order" })
   @ApiOperation({ summary: "Place a new order" })
-  create(@CurrentUser() user: { id: string }, @Body() dto: CreateOrderDto) {
-    return this.orders.create(user.id, dto);
+  create(@CurrentUser() user: Me, @Body() dto: CreateOrderDto, @Headers("idempotency-key") key?: string) {
+    if (key !== undefined && !KEY.test(key)) throw new BadRequestException("Idempotency-Key invalide (8 à 100 caractères alphanumériques, - ou _)");
+    return this.orders.create(user.id, dto, key);
   }
 
   @Get("my")
   @Roles(Role.CUSTOMER)
-  @ApiOperation({ summary: "Get my orders" })
-  myOrders(@CurrentUser() user: { id: string }) {
-    return this.orders.findByCustomer(user.id);
+  @ApiOperation({ summary: "My orders (paginated)" })
+  myOrders(@CurrentUser() user: Me, @Query() q: OrderListQueryDto) {
+    return this.orders.findByCustomer(user.id, q);
   }
 
   @Get("franchise")
   @Roles(Role.FRANCHISE_OWNER)
-  @ApiOperation({ summary: "Get all orders for my franchise" })
-  franchiseOrders(@CurrentUser() user: { id: string }) {
-    return this.orders.findByFranchise(user.id);
+  @ApiOperation({ summary: "Orders of my franchise (paginated, filter by status)" })
+  franchiseOrders(@CurrentUser() user: Me, @Query() q: OrderListQueryDto) {
+    return this.orders.findByFranchise(user.id, q);
   }
 
   @Get(":id")
-  @ApiOperation({ summary: "Get order details" })
-  findOne(@Param("id") id: string) {
-    return this.orders.findById(id);
+  @ApiOperation({ summary: "Order details: customer, fulfilling franchise or admin only" })
+  findOne(@Param("id") id: string, @CurrentUser() user: Me) {
+    return this.orders.findById(id, user);
+  }
+
+  @Post(":id/cancel")
+  @Roles(Role.CUSTOMER)
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: "Cancel my own unpaid, pending order" })
+  cancel(@Param("id") id: string, @CurrentUser() user: Me) {
+    return this.orders.updateStatus(id, "CANCELLED", user);
   }
 
   @Patch(":id/status")
   @Roles(Role.FRANCHISE_OWNER, Role.ADMIN)
-  @ApiOperation({ summary: "Update order status" })
-  updateStatus(
-    @Param("id") id: string,
-    @CurrentUser() user: { id: string; role: Role },
-    @Body() dto: UpdateOrderStatusDto
-  ) {
+  @ApiOperation({ summary: "Update order status (franchise: own orders only)" })
+  updateStatus(@Param("id") id: string, @CurrentUser() user: Me, @Body() dto: UpdateOrderStatusDto) {
     return this.orders.updateStatus(id, dto.status, user);
   }
 }

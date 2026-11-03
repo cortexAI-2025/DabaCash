@@ -51,6 +51,12 @@ test("missing IMEI only matters for phones; unknown model age is ignored", () =>
   assert.equal(scoreFraud({ ...clean, condition: Condition.A, ageYears: null }).score, 0);
 });
 
+test("a blocklisted IMEI is flagged on its own and explains why", () => {
+  const r = scoreFraud({ ...clean, imeiBlocked: true });
+  assert.ok(r.score >= FLAG_THRESHOLD);
+  assert.deepEqual(r.reasons, ["IMEI sur la liste de blocage"]);
+});
+
 test("the score never exceeds 1", () => {
   const r = scoreFraud({ ...clean, imei: "1", imeiSeenElsewhere: true, ageYears: 99, requestsLast24h: 9, accountAgeHours: 0, estimatedPrice: 20000 });
   assert.equal(r.score, 1);

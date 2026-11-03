@@ -15,17 +15,21 @@ const casablancaDay = (d: Date) => new Intl.DateTimeFormat("en-CA", { timeZone: 
 export class AnalyticsService {
   constructor(private prisma: PrismaService) {}
 
-  async getAnalytics(days: number) {
+  /** Platform-wide, or scoped to one franchise when `franchiseId` is given (franchise dashboard). */
+  async getAnalytics(days: number, franchiseId?: string) {
     const now = new Date();
     const since = new Date(now.getTime() - days * DAY_MS);
     const prevSince = new Date(since.getTime() - days * DAY_MS);
+    // Appended to every query over `orders o`; empty for the platform view.
+    const scope = franchiseId ? Prisma.sql`AND o."franchiseId" = ${franchiseId}` : Prisma.empty;
+    const fScope = franchiseId ? { franchiseId } : {};
 
     const [dailyRows, categoryRows, sellerRows, franchiseRows, prevRows, commissions, onHand, buybacks, buybacksByFranchise] =
       await Promise.all([
         this.prisma.$queryRaw<{ day: string; orders: number; gmv: number }[]>`
           SELECT to_char(((o."createdAt" AT TIME ZONE 'UTC') AT TIME ZONE ${TZ})::date, 'YYYY-MM-DD') AS day,
                  COUNT(*)::int AS orders, COALESCE(SUM(o."totalAmount"), 0)::float AS gmv
-          FROM orders o WHERE ${SETTLED} AND o."createdAt" >= ${since}
+          FROM orders o WHERE ${SETTLED} AND o."createdAt" >= ${since} ${scope}
           GROUP BY 1 ORDER BY 1`,
         this.prisma.$queryRaw<{ category: string; units: number; revenue: number; cost: number }[]>`
           SELECT dm."deviceType"::text AS category, COALESCE(SUM(oi.quantity), 0)::int AS units,
@@ -35,7 +39,7 @@ export class AnalyticsService {
           JOIN orders o ON o.id = oi."orderId"
           JOIN product_listings pl ON pl.id = oi."listingId"
           JOIN device_models dm ON dm.id = pl."deviceModelId"
-          WHERE ${SETTLED} AND o."createdAt" >= ${since}
+          WHERE ${SETTLED} AND o."createdAt" >= ${since} ${scope}
           GROUP BY 1 ORDER BY revenue DESC`,
         this.prisma.$queryRaw<{ listingId: string; title: string; franchise: string; units: number; revenue: number; avgDaysToSell: number }[]>`
           SELECT pl.id AS "listingId", pl.title, f.name AS franchise,
@@ -45,7 +49,7 @@ export class AnalyticsService {
           JOIN orders o ON o.id = oi."orderId"
           JOIN product_listings pl ON pl.id = oi."listingId"
           JOIN franchises f ON f.id = pl."franchiseId"
-          WHERE ${SETTLED} AND o."createdAt" >= ${since}
+          WHERE ${SETTLED} AND o."createdAt" >= ${since} ${scope}
           GROUP BY pl.id, pl.title, f.name
           ORDER BY "avgDaysToSell" ASC, units DESC LIMIT 10`,
         this.prisma.$queryRaw<{ id: string; name: string; city: string; orders: number; units: number; revenue: number; cost: number }[]>`
@@ -58,24 +62,24 @@ export class AnalyticsService {
             FROM orders o
             JOIN order_items oi ON oi."orderId" = o.id
             JOIN product_listings pl ON pl.id = oi."listingId"
-            WHERE ${SETTLED} AND o."createdAt" >= ${since}
+            WHERE ${SETTLED} AND o."createdAt" >= ${since} ${scope}
             GROUP BY o."franchiseId"
           ) s ON s.fid = f.id
-          WHERE f.status = 'ACTIVE'
+          WHERE f.status = 'ACTIVE' ${franchiseId ? Prisma.sql`AND f.id = ${franchiseId}` : Prisma.empty}
           ORDER BY revenue DESC`,
         this.prisma.$queryRaw<{ orders: number; gmv: number }[]>`
           SELECT COUNT(*)::int AS orders, COALESCE(SUM(o."totalAmount"), 0)::float AS gmv
-          FROM orders o WHERE ${SETTLED} AND o."createdAt" >= ${prevSince} AND o."createdAt" < ${since}`,
+          FROM orders o WHERE ${SETTLED} AND o."createdAt" >= ${prevSince} AND o."createdAt" < ${since} ${scope}`,
         this.prisma.commission.groupBy({
           by: ["franchiseId"],
-          where: { createdAt: { gte: since } },
+          where: { createdAt: { gte: since }, ...fScope },
           _sum: { amount: true },
         }),
-        this.prisma.inventory.groupBy({ by: ["franchiseId"], _sum: { quantity: true } }),
-        this.prisma.buybackRequest.groupBy({ by: ["status"], where: { createdAt: { gte: since } }, _count: true }),
+        this.prisma.inventory.groupBy({ by: ["franchiseId"], where: fScope, _sum: { quantity: true } }),
+        this.prisma.buybackRequest.groupBy({ by: ["status"], where: { createdAt: { gte: since }, ...fScope }, _count: true }),
         this.prisma.buybackRequest.groupBy({
           by: ["franchiseId"],
-          where: { createdAt: { gte: since }, status: { in: ["ACCEPTED", "COMPLETED"] } },
+          where: { createdAt: { gte: since }, status: { in: ["ACCEPTED", "COMPLETED"] }, ...fScope },
           _count: true,
         }),
       ]);

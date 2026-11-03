@@ -1,4 +1,4 @@
-import { Injectable } from "@nestjs/common";
+import { Injectable, NotFoundException, UnprocessableEntityException } from "@nestjs/common";
 import { Condition, DeviceType } from "@dabacash/database";
 import { PrismaService } from "../common/prisma/prisma.service";
 
@@ -9,7 +9,6 @@ export interface PriceEstimate {
   resaleMin: number;
   resaleMax: number;
   expectedMargin: number;
-  confidenceScore: number; // 0-1
 }
 
 // Condition multipliers for buyback (fraction of market price)
@@ -38,51 +37,47 @@ function ageDepreciation(releaseYear: number | null): number {
   return Math.max(0.6, 1 - clampedAge * 0.08);
 }
 
+/** Pure pricing rule: same inputs, same outputs. Whole-dirham results (Aslan/NAPS only accepts whole MAD). */
+export function computeEstimate(
+  model: { baseMarketPrice: number; releaseYear: number | null; deviceType: DeviceType },
+  condition: Condition
+): PriceEstimate {
+  const effectiveMarketPrice = model.baseMarketPrice * ageDepreciation(model.releaseYear);
+  const [buybackLow, buybackHigh] = CONDITION_BUYBACK_RANGE[condition];
+  const [resaleLow, resaleHigh] = RESALE_MULTIPLIER_RANGE[model.deviceType];
+
+  const buybackMin = Math.round(effectiveMarketPrice * buybackLow);
+  const buybackMax = Math.round(effectiveMarketPrice * buybackHigh);
+  const buybackPrice = Math.round((buybackMin + buybackMax) / 2);
+  const resaleMin = Math.round(buybackPrice * resaleLow);
+  const resaleMax = Math.round(buybackPrice * resaleHigh);
+
+  return { buybackPrice, buybackMin, buybackMax, resaleMin, resaleMax, expectedMargin: resaleMin - buybackPrice };
+}
+
 @Injectable()
 export class PricingService {
   constructor(private prisma: PrismaService) {}
 
-  async estimate(params: {
-    deviceModelId: string;
-    condition: Condition;
-    overrideMarketPrice?: number;
-  }): Promise<PriceEstimate> {
-    const model = await this.prisma.deviceModel.findUniqueOrThrow({
-      where: { id: params.deviceModelId },
-    });
+  /**
+   * Read-only: an anonymous caller must not be able to write to the database.
+   * Price history is recorded when an admin changes a model's baseline, not on every estimate.
+   */
+  async estimate(params: { deviceModelId: string; condition: Condition }): Promise<PriceEstimate> {
+    const model = await this.prisma.deviceModel.findUniqueOrThrow({ where: { id: params.deviceModelId } });
+    return this.estimateFor(model, params.condition);
+  }
 
-    const marketPrice = params.overrideMarketPrice ?? model.baseMarketPrice ?? 0;
-    const ageFactor = ageDepreciation(model.releaseYear);
-    const effectiveMarketPrice = marketPrice * ageFactor;
-
-    const [buybackLow, buybackHigh] = CONDITION_BUYBACK_RANGE[params.condition];
-    const [resaleLow, resaleHigh] = RESALE_MULTIPLIER_RANGE[model.deviceType];
-
-    const buybackMin = Math.round(effectiveMarketPrice * buybackLow);
-    const buybackMax = Math.round(effectiveMarketPrice * buybackHigh);
-    const buybackPrice = Math.round((buybackMin + buybackMax) / 2);
-
-    const resaleMin = Math.round(buybackPrice * resaleLow);
-    const resaleMax = Math.round(buybackPrice * resaleHigh);
-
-    const expectedMargin = Math.round(resaleMin - buybackPrice);
-    const confidenceScore = model.baseMarketPrice ? 0.85 : 0.55;
-
-    // Persist to price history
-    await this.prisma.priceHistory.create({
-      data: {
-        deviceModelId: model.id,
-        condition: params.condition,
-        marketPrice,
-        buybackMin,
-        buybackMax,
-        resaleMin,
-        resaleMax,
-        source: "system",
-      },
-    });
-
-    return { buybackPrice, buybackMin, buybackMax, resaleMin, resaleMax, expectedMargin, confidenceScore };
+  estimateFor(
+    model: { isActive: boolean; baseMarketPrice: number | null; releaseYear: number | null; deviceType: DeviceType },
+    condition: Condition
+  ): PriceEstimate {
+    if (!model.isActive) throw new NotFoundException("Modèle introuvable");
+    if (!model.baseMarketPrice || model.baseMarketPrice <= 0) {
+      // A model without a market baseline would otherwise quote 0 MAD.
+      throw new UnprocessableEntityException("Estimation indisponible pour ce modèle pour le moment");
+    }
+    return computeEstimate({ ...model, baseMarketPrice: model.baseMarketPrice }, condition);
   }
 
   async estimateByModelSlug(params: {
@@ -91,14 +86,9 @@ export class PricingService {
     condition: Condition;
   }): Promise<PriceEstimate & { modelName: string; brandName: string }> {
     const model = await this.prisma.deviceModel.findFirstOrThrow({
-      where: {
-        slug: params.modelSlug,
-        brand: { slug: params.brandSlug },
-      },
+      where: { slug: params.modelSlug, brand: { slug: params.brandSlug } },
       include: { brand: true },
     });
-
-    const estimate = await this.estimate({ deviceModelId: model.id, condition: params.condition });
-    return { ...estimate, modelName: model.name, brandName: model.brand.name };
+    return { ...this.estimateFor(model, params.condition), modelName: model.name, brandName: model.brand.name };
   }
 }
