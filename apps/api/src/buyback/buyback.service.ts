@@ -1,5 +1,5 @@
 import {
-  BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException,
+  BadRequestException, ConflictException, Injectable, NotFoundException,
 } from "@nestjs/common";
 import { BuybackStatus, DeliveryMethod, Prisma, Role } from "@dabacash/database";
 import { AuditAction, AuditService } from "../audit/audit.service";
@@ -20,6 +20,14 @@ const VIEW = {
   model: MODEL,
   franchise: { select: { name: true, city: true } },
 } satisfies Prisma.BuybackRequestInclude;
+
+/** Staff-only detection internals: showing them to the customer would teach a fraudster which rule fired. */
+const FRAUD_FIELDS = ["fraudScore", "fraudReasons", "fraudNote", "fraudResolution", "fraudReviewedAt", "fraudReviewedById", "isFlagged"] as const;
+function forCustomer<T extends object>(r: T): Omit<T, (typeof FRAUD_FIELDS)[number]> {
+  const copy = { ...r } as Record<string, unknown>;
+  for (const k of FRAUD_FIELDS) delete copy[k];
+  return copy as Omit<T, (typeof FRAUD_FIELDS)[number]>;
+}
 
 const REVIEWABLE: BuybackStatus[] = [BuybackStatus.PENDING, BuybackStatus.UNDER_REVIEW];
 // A customer may withdraw until the franchise has taken the device.
@@ -46,7 +54,7 @@ export class BuybackService {
         where: { customerId_idempotencyKey: { customerId, idempotencyKey } },
         include: VIEW,
       });
-      if (existing) return existing;
+      if (existing) return forCustomer(existing);
     }
 
     const model = await this.prisma.deviceModel.findUniqueOrThrow({ where: { id: dto.deviceModelId } });
@@ -61,7 +69,7 @@ export class BuybackService {
     const flagged = fraud.score >= FLAG_THRESHOLD;
 
     try {
-      return await this.prisma.$transaction(async (tx) => {
+      const created = await this.prisma.$transaction(async (tx) => {
         const created = await tx.buybackRequest.create({
           data: {
             customerId,
@@ -91,6 +99,7 @@ export class BuybackService {
         }
         return created;
       });
+      return forCustomer(created);
     } catch (err) {
       // Two identical submissions raced past the lookup: the unique key stops the second one.
       if (idempotencyKey && err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") {
@@ -98,7 +107,7 @@ export class BuybackService {
           where: { customerId_idempotencyKey: { customerId, idempotencyKey } },
           include: VIEW,
         });
-        if (existing) return existing;
+        if (existing) return forCustomer(existing);
       }
       throw err;
     }
@@ -181,7 +190,7 @@ export class BuybackService {
       this.prisma.buybackRequest.findMany({ where, include: VIEW, orderBy: { createdAt: "desc" }, ...skipTake(q.page, q.limit) }),
       this.prisma.buybackRequest.count({ where }),
     ]);
-    return paginated(items, total, q.page, q.limit);
+    return paginated(items.map(forCustomer), total, q.page, q.limit);
   }
 
   async findAllForFranchise(franchiseOwnerId: string, q: BuybackListQueryDto) {
@@ -225,7 +234,7 @@ export class BuybackService {
       ...r,
       franchise: r.franchise ? franchise : null,
       // The customer already knows their own data; the fraud internals are for staff only.
-      ...(isCustomer && { fraudScore: undefined, fraudReasons: undefined, fraudNote: undefined, isFlagged: undefined }),
+      ...(isCustomer && Object.fromEntries(FRAUD_FIELDS.map((k) => [k, undefined]))),
     };
   }
 
@@ -324,6 +333,6 @@ export class BuybackService {
       if (!count) throw new ConflictException("Cette demande ne peut plus être annulée");
       await this.audit.record({ actor: { id: customerId, role: Role.CUSTOMER }, action: AuditAction.BUYBACK_CANCELLED, entity: "BuybackRequest", entityId: requestId }, tx);
     });
-    return this.prisma.buybackRequest.findUniqueOrThrow({ where: { id: requestId }, include: VIEW });
+    return forCustomer(await this.prisma.buybackRequest.findUniqueOrThrow({ where: { id: requestId }, include: VIEW }));
   }
 }

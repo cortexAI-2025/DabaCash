@@ -1,5 +1,5 @@
 import { ConflictException, Injectable, NotFoundException } from "@nestjs/common";
-import { FranchiseStatus, Prisma, Role } from "@dabacash/database";
+import { Prisma, Role } from "@dabacash/database";
 import { AuditAction, AuditService } from "../audit/audit.service";
 import { AuthService } from "../auth/auth.service";
 import { paginated, skipTake } from "../common/pagination";

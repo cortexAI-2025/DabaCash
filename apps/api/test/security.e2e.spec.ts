@@ -107,7 +107,7 @@ describe("security: access control, data exposure, transport, error handling", (
   });
 
   describe("public endpoints do not leak internals", () => {
-    const secretsIn = (v: unknown) => /buybackPrice|commissionRate|ownerId|passwordHash|\"email\"/.test(JSON.stringify(v));
+    const secretsIn = (v: unknown) => /buybackPrice|commissionRate|ownerId|passwordHash|"email"/.test(JSON.stringify(v));
 
     it("listings expose the sale price but not what the franchise paid", async () => {
       const list = await h.call("GET", "/marketplace/listings");
