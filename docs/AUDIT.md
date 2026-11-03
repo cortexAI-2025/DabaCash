@@ -93,3 +93,24 @@ Journal d'audit · limitation de débit · verrouillage de compte · changement 
 - **Resend réel** : idem, testé contre un faux serveur.
 - **Build APK signé** : jamais exécuté avec de vrais secrets de signature.
 - **Dernier run GitHub Actions** : les journaux CI ne sont pas accessibles depuis cet environnement.
+
+## 4. État final (après la finalisation bêta)
+
+Branche `feature/dabacash-v1-beta-finalization`. Détail des chiffres : [TESTING.md](TESTING.md).
+
+| Élément de l'état initial | Statut final | Preuve |
+|---|---|---|
+| A1–A7, I4, D4, C1, C2 (critiques et hautes) | **Corrigés** | sondes rejouées en tests d'intégration ; 15 protections retirées une à une, toutes détectées |
+| D1–D3, V1, V2, V4, I1–I3, I5 (moyens et bas) | **Corrigés** | tests `validation`, `security`, `production`, `smoke` |
+| Fuites découvertes ensuite (prix de rachat, champs de fraude, 413→500) | **Corrigées** | tests `security`, `buyback`, `validation` |
+| Identifiants admin codés en dur | **Supprimés** ; admin créé par script depuis l'environnement ; démo isolée et refusée en production | `packages/database/prisma/*` |
+| `npm audit` 20 vulnérabilités (1 critique, 8 hautes) | **Production : 0.** Reste 24 avis dev-only (outil de build APK, chaîne ESLint) | SECURITY.md, limite 8 |
+| Lint inexistant | ESLint API (0 erreur) et web (0 erreur) | CI |
+| CI : typage + 15 tests unitaires | CI : migrations + dérive, typage, lint, 25 unitaires, **273 d'intégration**, builds web + APK, audit | `.github/workflows/ci.yml` |
+| Client incomplet | **Ajouté** : *Mon compte* (profil, notifications, rachats, mot de passe, export, suppression), annulation de commande, IMEI et adresse d'enlèvement | `/account`, `/sell` |
+| Franchise incomplet | **Ajouté** : surcharge de prix encadrée, finalisation, édition prix/stock, archivage, toutes les transitions, analytics sur période | `/dashboard/*` |
+| Admin incomplet | **Ajouté** : utilisateurs et rôles, création de franchise, catalogue/prix, transactions, audit, IMEI, fraude réversible | `/admin/*` |
+| Web : erreurs et chiffres inventés | Pages d'erreur et 404 ; chiffres d'accueil lus depuis l'API ; texte « IA » remplacé par une description honnête de l'estimateur | `HeroSection`, `PriceEstimator` |
+| Docs : aucune | README, INSTALL, ENVIRONMENT, DEPLOY (avec rollback), SECURITY, RECETTE, TESTING, RELEASE_NOTES | `docs/` |
+
+Ce qui **reste** (voir RELEASE_NOTES.md) : cookies de session lisibles par JS, rate limiting mono-instance, montants en `Float`, pas de remboursement ni de téléversement de photos, pas de comptes employés, intégrations Aslan/Resend jamais validées en réel, textes juridiques à rédiger, APK signé non testé.
