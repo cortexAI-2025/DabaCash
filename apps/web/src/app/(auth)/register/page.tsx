@@ -10,13 +10,16 @@ import { authApi } from "@/lib/api";
 import { setAuthTokens, getRoleRedirect, type UserRole } from "@/lib/auth";
 import { Zap, Loader2 } from "lucide-react";
 import toast from "react-hot-toast";
+import { apiMessage } from "@/lib/errors";
+import { Field } from "@/components/ui/Field";
 
 const schema = z.object({
   firstName: z.string().min(2, "Prénom requis"),
   lastName: z.string().min(2, "Nom requis"),
   email: z.string().email("Email invalide"),
-  phone: z.string().optional(),
-  password: z.string().min(8, "Minimum 8 caractères"),
+  phone: z.string().trim().optional(),
+  password: z.string().min(10, "Minimum 10 caractères").max(72, "72 caractères maximum")
+    .regex(/[A-Za-z]/, "Au moins une lettre").regex(/\d/, "Au moins un chiffre"),
   confirmPassword: z.string(),
 }).refine((d) => d.password === d.confirmPassword, {
   message: "Les mots de passe ne correspondent pas",
@@ -46,8 +49,8 @@ export default function RegisterPage() {
       setAuthTokens(auth.accessToken, auth.refreshToken, auth.role as UserRole);
       toast.success("Compte créé avec succès !");
       router.push(getRoleRedirect(auth.role as any));
-    } catch (err: any) {
-      toast.error(err.response?.data?.message ?? "Erreur lors de l'inscription");
+    } catch (err) {
+      toast.error(apiMessage(err, "Erreur lors de l'inscription"));
     } finally {
       setLoading(false);
     }
@@ -71,40 +74,25 @@ export default function RegisterPage() {
 
         <form onSubmit={handleSubmit(onSubmit)} className="card space-y-4">
           <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="label">Prénom</label>
-              <input className="input" placeholder="Youssef" {...register("firstName")} />
-              {errors.firstName && <p className="mt-1 text-xs text-red-400">{errors.firstName.message}</p>}
-            </div>
-            <div>
-              <label className="label">Nom</label>
-              <input className="input" placeholder="Benali" {...register("lastName")} />
-              {errors.lastName && <p className="mt-1 text-xs text-red-400">{errors.lastName.message}</p>}
-            </div>
+            <Field label="Prénom" error={errors.firstName?.message}>
+              {(p) => <input className="input" autoComplete="given-name" placeholder="Youssef" {...p} {...register("firstName")} />}
+            </Field>
+            <Field label="Nom" error={errors.lastName?.message}>
+              {(p) => <input className="input" autoComplete="family-name" placeholder="Benali" {...p} {...register("lastName")} />}
+            </Field>
           </div>
-
-          <div>
-            <label className="label">Email</label>
-            <input type="email" className="input" placeholder="vous@exemple.com" {...register("email")} />
-            {errors.email && <p className="mt-1 text-xs text-red-400">{errors.email.message}</p>}
-          </div>
-
-          <div>
-            <label className="label">Téléphone (optionnel)</label>
-            <input className="input" placeholder="+212 6xx xxx xxx" {...register("phone")} />
-          </div>
-
-          <div>
-            <label className="label">Mot de passe</label>
-            <input type="password" className="input" placeholder="••••••••" {...register("password")} />
-            {errors.password && <p className="mt-1 text-xs text-red-400">{errors.password.message}</p>}
-          </div>
-
-          <div>
-            <label className="label">Confirmer le mot de passe</label>
-            <input type="password" className="input" placeholder="••••••••" {...register("confirmPassword")} />
-            {errors.confirmPassword && <p className="mt-1 text-xs text-red-400">{errors.confirmPassword.message}</p>}
-          </div>
+          <Field label="Email" error={errors.email?.message}>
+            {(p) => <input type="email" className="input" autoComplete="email" placeholder="vous@exemple.com" {...p} {...register("email")} />}
+          </Field>
+          <Field label="Téléphone (optionnel)" error={errors.phone?.message}>
+            {(p) => <input type="tel" className="input" autoComplete="tel" placeholder="+212 6xx xxx xxx" {...p} {...register("phone")} />}
+          </Field>
+          <Field label="Mot de passe" error={errors.password?.message} hint="10 caractères minimum, avec au moins une lettre et un chiffre.">
+            {(p) => <input type="password" className="input" autoComplete="new-password" {...p} {...register("password")} />}
+          </Field>
+          <Field label="Confirmer le mot de passe" error={errors.confirmPassword?.message}>
+            {(p) => <input type="password" className="input" autoComplete="new-password" {...p} {...register("confirmPassword")} />}
+          </Field>
 
           <button type="submit" className="btn-primary w-full justify-center" disabled={loading}>
             {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : "Créer mon compte"}

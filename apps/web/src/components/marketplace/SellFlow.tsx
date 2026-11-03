@@ -1,6 +1,7 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -10,6 +11,10 @@ import { formatPrice, CONDITION_LABELS } from "@/lib/utils";
 import { cn } from "@/lib/utils";
 import { Zap, CheckCircle, Store, Truck, AlertCircle } from "lucide-react";
 import toast from "react-hot-toast";
+import { apiMessage, errorStatus } from "@/lib/errors";
+import { newIdempotencyKey } from "@/lib/idempotency";
+import { getRefreshToken } from "@/lib/auth";
+import { Field } from "@/components/ui/Field";
 
 const steps = ["Appareil", "Estimation", "Confirmer"];
 
@@ -18,8 +23,13 @@ const deviceSchema = z.object({
   modelSlug: z.string().min(1, "Choisissez un modèle"),
   condition: z.enum(["A", "B", "C", "D"]),
   citySlug: z.string().min(1, "Choisissez votre ville"),
-  description: z.string().optional(),
+  description: z.string().trim().max(1000, "1000 caractères maximum").optional(),
+  imei: z.string().trim().regex(/^(\d{15})?$/, "L'IMEI comporte 15 chiffres (composez *#06# sur l'appareil)").optional(),
+  pickupAddress: z.string().trim().max(200).optional(),
   deliveryMethod: z.enum(["DROP_IN_STORE", "PICKUP_FROM_HOME"]),
+}).refine((d) => d.deliveryMethod !== "PICKUP_FROM_HOME" || (d.pickupAddress ?? "").length >= 5, {
+  message: "Adresse d'enlèvement requise (5 caractères minimum)",
+  path: ["pickupAddress"],
 });
 
 type DeviceFormData = z.infer<typeof deviceSchema>;
@@ -29,6 +39,10 @@ export function SellFlow() {
   const [estimate, setEstimate] = useState<any>(null);
   const [deviceModelId, setDeviceModelId] = useState("");
   const [submitted, setSubmitted] = useState(false);
+  const [sending, setSending] = useState(false);
+  const router = useRouter();
+  // One key per submission intent: a double click or a retry after a network error cannot create two requests.
+  const idemKey = useRef<string | null>(null);
 
   const { register, handleSubmit, watch, setValue, formState: { errors } } = useForm<DeviceFormData>({
     resolver: zodResolver(deviceSchema),
@@ -59,24 +73,41 @@ export function SellFlow() {
   const handleGetEstimate = async (data: DeviceFormData) => {
     const model = models?.find((m: any) => m.slug === data.modelSlug);
     setDeviceModelId(model?.id ?? "");
-    const { data: est } = await pricingApi.estimate(data.brandSlug, data.modelSlug, data.condition);
-    setEstimate(est);
-    setStep(1);
+    try {
+      const { data: est } = await pricingApi.estimate(data.brandSlug, data.modelSlug, data.condition);
+      setEstimate(est);
+      idemKey.current = null;
+      setStep(1);
+    } catch (e) {
+      toast.error(errorStatus(e) === 422 ? "Estimation indisponible pour ce modèle pour le moment." : apiMessage(e));
+    }
   };
 
   const handleConfirm = async (data: DeviceFormData) => {
+    if (!getRefreshToken()) {
+      toast("Connectez-vous pour envoyer votre demande.");
+      router.push("/login?next=/sell");
+      return;
+    }
+    if (sending) return;
+    setSending(true);
+    idemKey.current ??= newIdempotencyKey();
     try {
       await buybackApi.create({
         deviceModelId,
         citySlug: data.citySlug,
         condition: data.condition,
         deliveryMethod: data.deliveryMethod,
-        description: data.description,
-      });
+        ...(data.description && { description: data.description }),
+        ...(data.imei && { imei: data.imei }),
+        ...(data.deliveryMethod === "PICKUP_FROM_HOME" && data.pickupAddress && { pickupAddress: data.pickupAddress }),
+      }, idemKey.current);
       setSubmitted(true);
       setStep(2);
-    } catch {
-      toast.error("Erreur lors de la soumission. Veuillez réessayer.");
+    } catch (e) {
+      toast.error(apiMessage(e, "Erreur lors de la soumission. Veuillez réessayer."));
+    } finally {
+      setSending(false);
     }
   };
 
@@ -87,8 +118,8 @@ export function SellFlow() {
           <CheckCircle className="h-16 w-16 text-emerald-400 mx-auto mb-6" />
           <h1 className="text-2xl font-black text-dark-50 mb-4">Demande envoyée !</h1>
           <p className="text-dark-400 mb-8">
-            Votre demande de rachat a été soumise. Une franchise vous contactera sous 24h
-            pour confirmer les détails et organiser la récupération.
+            Votre demande de rachat a été soumise. Une franchise l&apos;examinera et vous contactera pour
+            confirmer le prix final et organiser la remise de l&apos;appareil. Suivez l&apos;avancement depuis votre espace.
           </p>
           <a href="/marketplace" className="btn-primary w-full justify-center">
             Explorer le marketplace
@@ -131,46 +162,44 @@ export function SellFlow() {
           <div className="card space-y-5">
             <h2 className="text-lg font-bold text-dark-50">Décrivez votre appareil</h2>
 
-            <div>
-              <label className="label">Marque *</label>
-              <select className="input" {...register("brandSlug")}>
+            <Field label="Marque *" error={errors.brandSlug?.message}>
+              {(p) => (
+              <select className="input" {...p} {...register("brandSlug")}>
                 <option value="">Sélectionner une marque</option>
                 {brands?.map((b: any) => (
                   <option key={b.slug} value={b.slug}>{b.name}</option>
                 ))}
-              </select>
-              {errors.brandSlug && <p className="mt-1 text-xs text-red-400">{errors.brandSlug.message}</p>}
-            </div>
+              </select>)}
+            </Field>
 
-            <div>
-              <label className="label">Modèle *</label>
-              <select className="input" {...register("modelSlug")} disabled={!brandSlug}>
+            <Field label="Modèle *" error={errors.modelSlug?.message}>
+              {(p) => (
+              <select className="input" {...p} {...register("modelSlug")} disabled={!brandSlug}>
                 <option value="">Sélectionner un modèle</option>
                 {models?.map((m: any) => (
                   <option key={m.slug} value={m.slug}>{m.name}</option>
                 ))}
-              </select>
-              {errors.modelSlug && <p className="mt-1 text-xs text-red-400">{errors.modelSlug.message}</p>}
-            </div>
+              </select>)}
+            </Field>
 
-            <div>
-              <label className="label">Ville *</label>
-              <select className="input" {...register("citySlug")}>
+            <Field label="Ville *" error={errors.citySlug?.message}>
+              {(p) => (
+              <select className="input" {...p} {...register("citySlug")}>
                 <option value="">Sélectionner votre ville</option>
                 {cities?.map((c: any) => (
                   <option key={c.slug} value={c.slug}>{c.name}</option>
                 ))}
-              </select>
-              {errors.citySlug && <p className="mt-1 text-xs text-red-400">{errors.citySlug.message}</p>}
-            </div>
+              </select>)}
+            </Field>
 
             <div>
-              <label className="label">État de l&apos;appareil *</label>
-              <div className="grid grid-cols-2 gap-3">
+              <span className="label" id="cond-label">État de l&apos;appareil *</span>
+              <div className="grid grid-cols-2 gap-3" role="group" aria-labelledby="cond-label">
                 {(["A", "B", "C", "D"] as const).map((c) => (
                   <button
                     key={c}
                     type="button"
+                    aria-pressed={condition === c}
                     onClick={() => setValue("condition", c)}
                     className={cn(
                       "rounded-xl border p-4 text-left transition-all",
@@ -186,14 +215,16 @@ export function SellFlow() {
               </div>
             </div>
 
-            <div>
-              <label className="label">Description (optionnel)</label>
-              <textarea
-                className="input min-h-[80px] resize-none"
-                placeholder="Informations supplémentaires: accessoires inclus, défauts…"
-                {...register("description")}
-              />
-            </div>
+            <Field label="IMEI (recommandé pour un téléphone)" error={errors.imei?.message} hint="15 chiffres, composez *#06# sur l'appareil. Sert à vérifier que l'appareil n'est pas déclaré volé.">
+              {(p) => <input className="input" inputMode="numeric" maxLength={15} autoComplete="off" {...p} {...register("imei")} />}
+            </Field>
+
+            <Field label="Description (optionnel)" error={errors.description?.message}>
+              {(p) => (
+                <textarea className="input min-h-[80px] resize-none" maxLength={1000}
+                  placeholder="Informations supplémentaires : accessoires inclus, défauts…" {...p} {...register("description")} />
+              )}
+            </Field>
 
             <button type="submit" className="btn-primary w-full justify-center">
               Obtenir une estimation
@@ -253,7 +284,7 @@ export function SellFlow() {
                       ? "border-gold-500 bg-gold-500/5"
                       : "border-dark-700 hover:border-dark-600"
                   )}>
-                    <input type="radio" value={value} {...register("deliveryMethod")} className="sr-only" />
+                    <input type="radio" value={value} {...register("deliveryMethod")} className="peer sr-only" />
                     <div className="mt-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-dark-800">
                       <Icon className="h-5 w-5 text-gold-400" />
                     </div>
@@ -266,11 +297,19 @@ export function SellFlow() {
               </div>
             </div>
 
+            {watch("deliveryMethod") === "PICKUP_FROM_HOME" && (
+              <div className="card">
+                <Field label="Adresse d'enlèvement *" error={errors.pickupAddress?.message}>
+                  {(p) => <input className="input" maxLength={200} autoComplete="street-address" {...p} {...register("pickupAddress")} />}
+                </Field>
+              </div>
+            )}
+
             <div className="flex gap-4">
               <button type="button" className="btn-secondary flex-1 justify-center" onClick={() => setStep(0)}>
                 Retour
               </button>
-              <button type="submit" className="btn-primary flex-1 justify-center">
+              <button type="submit" className="btn-primary flex-1 justify-center" disabled={sending}>
                 Confirmer la demande
                 <CheckCircle className="h-4 w-4" />
               </button>

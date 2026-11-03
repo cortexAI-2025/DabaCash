@@ -6,6 +6,7 @@ import { marketplaceApi, pricingApi } from "@/lib/api";
 import { Zap, TrendingDown, TrendingUp, Info } from "lucide-react";
 import { formatPrice, CONDITION_LABELS } from "@/lib/utils";
 import { cn } from "@/lib/utils";
+import { apiMessage, errorStatus } from "@/lib/errors";
 
 const conditions = ["A", "B", "C", "D"] as const;
 
@@ -15,6 +16,7 @@ export function PriceEstimator() {
   const [condition, setCondition] = useState<"A" | "B" | "C" | "D">("B");
   const [estimate, setEstimate] = useState<any>(null);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const { data: brands } = useQuery({
     queryKey: ["brands"],
@@ -30,9 +32,13 @@ export function PriceEstimator() {
   const handleEstimate = async () => {
     if (!selectedBrand || !selectedModel) return;
     setLoading(true);
+    setError(null);
     try {
       const { data } = await pricingApi.estimate(selectedBrand, selectedModel, condition);
       setEstimate(data);
+    } catch (e) {
+      setEstimate(null);
+      setError(errorStatus(e) === 422 ? "Aucune estimation disponible pour ce modèle pour le moment." : apiMessage(e));
     } finally {
       setLoading(false);
     }
@@ -46,18 +52,18 @@ export function PriceEstimator() {
           <div>
             <div className="mb-4 inline-flex items-center gap-2 rounded-full border border-gold-500/30 bg-gold-500/10 px-4 py-2 text-sm text-gold-400">
               <Zap className="h-4 w-4" />
-              Estimateur IA instantané
+              Estimateur indicatif
             </div>
             <h2 className="section-title mb-6">
               Combien vaut <span className="gradient-text">votre appareil</span> ?
             </h2>
             <p className="text-dark-400 leading-relaxed mb-8">
-              Notre moteur d&apos;estimation analyse les prix du marché en temps réel
-              et vous donne une fourchette précise en quelques secondes.
+              Notre estimateur applique des barèmes par état à un prix de référence par modèle
+              et vous donne une fourchette indicative en quelques secondes.
               Aucune inscription requise.
             </p>
             <div className="flex flex-col gap-3 text-sm text-dark-300">
-              {["Basé sur les prix du marché marocain", "Mis à jour quotidiennement", "Estimation en 30 secondes"].map((f) => (
+              {["Barème par état de l'appareil (A à D)", "Prix de référence géré par l'équipe DabaCash", "Prix final confirmé à l'inspection en franchise"].map((f) => (
                 <div key={f} className="flex items-center gap-2">
                   <div className="h-1.5 w-1.5 rounded-full bg-gold-400" />
                   {f}
@@ -73,8 +79,9 @@ export function PriceEstimator() {
             <div className="space-y-4">
               {/* Brand */}
               <div>
-                <label className="label">Marque</label>
+                <label className="label" htmlFor="est-brand">Marque</label>
                 <select
+                  id="est-brand"
                   className="input"
                   value={selectedBrand}
                   onChange={(e) => { setSelectedBrand(e.target.value); setSelectedModel(""); setEstimate(null); }}
@@ -88,8 +95,9 @@ export function PriceEstimator() {
 
               {/* Model */}
               <div>
-                <label className="label">Modèle</label>
+                <label className="label" htmlFor="est-model">Modèle</label>
                 <select
+                  id="est-model"
                   className="input"
                   value={selectedModel}
                   onChange={(e) => { setSelectedModel(e.target.value); setEstimate(null); }}
@@ -104,11 +112,13 @@ export function PriceEstimator() {
 
               {/* Condition */}
               <div>
-                <label className="label">État</label>
-                <div className="grid grid-cols-4 gap-2">
+                <span className="label" id="est-cond">État</span>
+                <div className="grid grid-cols-4 gap-2" role="group" aria-labelledby="est-cond">
                   {conditions.map((c) => (
                     <button
                       key={c}
+                      type="button"
+                      aria-pressed={condition === c}
                       onClick={() => { setCondition(c); setEstimate(null); }}
                       className={cn(
                         "rounded-xl border py-3 text-center text-sm font-semibold transition-all",
@@ -139,6 +149,8 @@ export function PriceEstimator() {
                 <Zap className="h-4 w-4" />
               </button>
             </div>
+
+            {error && <p className="mt-4 text-sm text-red-300" role="alert">{error}</p>}
 
             {/* Result */}
             {estimate && (
@@ -171,7 +183,6 @@ export function PriceEstimator() {
                 </div>
                 <div className="text-xs text-dark-400 text-center">
                   Marge estimée: <span className="text-emerald-400 font-semibold">{formatPrice(estimate.expectedMargin)}</span>
-                  {" · "}Confiance: <span className="text-gold-400">{Math.round(estimate.confidenceScore * 100)}%</span>
                 </div>
               </div>
             )}

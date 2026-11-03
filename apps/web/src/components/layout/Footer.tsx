@@ -58,7 +58,7 @@ export function Footer() {
         </div>
 
         <div className="mt-12 border-t border-dark-800 pt-8 flex flex-col sm:flex-row items-center justify-between gap-4">
-          <p className="text-sm text-dark-500">© 2024 DabaCash. Tous droits réservés.</p>
+          <p className="text-sm text-dark-500">© {new Date().getFullYear()} DabaCash. Tous droits réservés.</p>
           <p className="text-xs text-dark-600">Made with ❤️ in Morocco 🇲🇦</p>
         </div>
       </div>

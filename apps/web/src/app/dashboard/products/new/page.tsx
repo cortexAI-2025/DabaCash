@@ -10,6 +10,7 @@ import toast from "react-hot-toast";
 import { Loader2 } from "lucide-react";
 import { marketplaceApi, productsApi } from "@/lib/api";
 import { CONDITION_LABELS } from "@/lib/utils";
+import { apiMessage } from "@/lib/errors";
 
 const schema = z
   .object({
@@ -17,10 +18,10 @@ const schema = z
     condition: z.enum(["A", "B", "C", "D"]),
     title: z.string().min(5, "Titre trop court"),
     description: z.string().optional(),
-    buybackPrice: z.coerce.number().min(0, "Prix invalide"),
-    listingPrice: z.coerce.number().min(0, "Prix invalide"),
-    originalPrice: z.coerce.number().min(0).optional().or(z.literal("")),
-    stockQuantity: z.coerce.number().int().min(1, "Au moins 1 unité"),
+    buybackPrice: z.coerce.number().int("Prix entier en MAD").min(0, "Prix invalide"),
+    listingPrice: z.coerce.number().int("Prix entier en MAD").min(1, "Prix invalide"),
+    originalPrice: z.coerce.number().int().min(0).optional().or(z.literal("")),
+    stockQuantity: z.coerce.number().int().min(1, "Au moins 1 unité").max(1000),
     warrantyMonths: z.coerce.number().int().min(0).max(36),
     imageUrls: z.string().optional(),
   })
@@ -63,8 +64,8 @@ export default function NewListingPage() {
       });
       toast.success("Produit publié");
       router.push("/dashboard/inventory");
-    } catch (err: any) {
-      toast.error(err.response?.data?.message ?? "Erreur lors de la création");
+    } catch (err) {
+      toast.error(apiMessage(err, "Erreur lors de la création"));
     } finally {
       setSaving(false);
     }

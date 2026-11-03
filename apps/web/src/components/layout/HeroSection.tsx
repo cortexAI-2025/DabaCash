@@ -1,24 +1,29 @@
 "use client";
 
 import Link from "next/link";
+import { useQuery } from "@tanstack/react-query";
+import { marketplaceApi } from "@/lib/api";
 import { ArrowRight, Shield, Truck, Zap, TrendingUp } from "lucide-react";
-import { motion } from "framer-motion";
 
-const stats = [
-  { label: "Appareils vendus", value: "12,000+" },
-  { label: "Franchises actives", value: "24" },
-  { label: "Satisfaction client", value: "98%" },
-  { label: "Économies moyennes", value: "45%" },
-];
 
 const features = [
   { icon: Zap, text: "Estimation en 30 secondes" },
-  { icon: Shield, text: "Garantie 6 mois" },
-  { icon: Truck, text: "Livraison nationale" },
-  { icon: TrendingUp, text: "Prix justes garantis" },
+  { icon: Shield, text: "Garantie selon l'annonce" },
+  { icon: Truck, text: "Retrait ou livraison" },
+  { icon: TrendingUp, text: "Prix affichés en dirhams" },
 ];
 
 export function HeroSection() {
+  // Real numbers from the API; nothing is shown until they load (no invented marketing figures).
+  const { data } = useQuery({ queryKey: ["marketplace-stats"], queryFn: () => marketplaceApi.getStats().then((r) => r.data), staleTime: 5 * 60_000, retry: 1 });
+  const stats = data
+    ? [
+        { label: "Annonces en vente", value: String(data.listings) },
+        { label: "Franchises actives", value: String(data.franchises) },
+        { label: "Villes couvertes", value: String(data.cities) },
+        { label: "Appareils vendus", value: String(data.devicesSold) },
+      ]
+    : [];
   return (
     <section className="relative overflow-hidden bg-hero-pattern">
       {/* Glow effects */}

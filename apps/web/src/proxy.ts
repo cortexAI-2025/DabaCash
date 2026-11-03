@@ -7,9 +7,11 @@ const ROLE_HOME: Record<string, string> = {
 };
 
 // Area -> the only role allowed in it.
-const AREA_ROLE: Array<{ prefix: string; role: string }> = [
+const AREA_ROLE: Array<{ prefix: string; role: string | null }> = [
   { prefix: "/admin", role: "ADMIN" },
   { prefix: "/dashboard", role: "FRANCHISE_OWNER" },
+  { prefix: "/account", role: null }, // any signed-in user
+  { prefix: "/orders", role: null },
 ];
 
 /**
@@ -17,7 +19,7 @@ const AREA_ROLE: Array<{ prefix: string; role: string }> = [
  * can at worst show an empty shell. Gating on the refresh token (7 days) instead of
  * the 15-minute access token lets the client refresh silently.
  */
-export function middleware(req: NextRequest) {
+export function proxy(req: NextRequest) {
   const { pathname, search } = req.nextUrl;
   const area = AREA_ROLE.find((a) => pathname === a.prefix || pathname.startsWith(`${a.prefix}/`));
   if (!area) return NextResponse.next();
@@ -31,7 +33,7 @@ export function middleware(req: NextRequest) {
   }
 
   const role = req.cookies.get("role")?.value ?? "";
-  if (role !== area.role) {
+  if (area.role && role !== area.role) {
     const url = req.nextUrl.clone();
     url.pathname = ROLE_HOME[role] ?? "/login";
     url.search = "";
@@ -41,5 +43,5 @@ export function middleware(req: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/admin/:path*", "/dashboard/:path*"],
+  matcher: ["/admin/:path*", "/dashboard/:path*", "/account/:path*", "/orders/:path*"],
 };
