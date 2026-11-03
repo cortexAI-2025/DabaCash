@@ -18,6 +18,7 @@ Créez une base et un utilisateur dédiés, puis renseignez `DATABASE_URL` et `D
 
 ```bash
 npm run db:generate
+npm run build --workspace=packages/database   # l'API importe packages/database/dist (ignoré par git)
 cd packages/database
 npx prisma migrate deploy                       # applique les 3 migrations
 npx prisma migrate diff --from-url "$DATABASE_URL" --to-schema-datamodel prisma/schema.prisma --exit-code   # doit rendre 0 (aucune dérive)

@@ -24,6 +24,7 @@ Prérequis : Node ≥ 22, PostgreSQL ≥ 14 (testé sur 16).
 cp .env.example .env            # puis renseigner DATABASE_URL, JWT_SECRET, JWT_REFRESH_SECRET
 npm ci
 npm run db:generate
+npm run build --workspace=packages/database    # l'API importe packages/database/dist
 npx prisma migrate deploy --schema packages/database/prisma/schema.prisma
 npm run db:seed --workspace=packages/database          # villes + modèles (sans prix)
 DEMO_PASSWORD='Choisissez-un-mdp-1' npm run db:seed:demo --workspace=packages/database   # données fictives

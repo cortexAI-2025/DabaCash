@@ -44,9 +44,11 @@ jobs:
           cache: npm
           cache-dependency-path: package-lock.json
       - run: npm ci
-      - name: Generate Prisma client
+      - name: Generate Prisma client and build the database package (the API imports its dist/)
         working-directory: packages/database
-        run: npx prisma generate
+        run: |
+          npx prisma generate
+          npm run build
       - name: Apply migrations to an empty database
         working-directory: packages/database
         run: npx prisma migrate deploy
