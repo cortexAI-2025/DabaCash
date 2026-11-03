@@ -1,135 +1,157 @@
-import { BadRequestException, ConflictException, Injectable, NotFoundException } from "@nestjs/common";
-import { BuybackStatus, FranchiseStatus, FraudResolution } from "@dabacash/database";
+import { ConflictException, Injectable, NotFoundException } from "@nestjs/common";
+import { Prisma, Role } from "@dabacash/database";
+import { AuditAction, AuditService } from "../audit/audit.service";
+import { AuthService } from "../auth/auth.service";
+import { paginated, skipTake } from "../common/pagination";
 import { PrismaService } from "../common/prisma/prisma.service";
-import { NotificationsService } from "../notifications/notifications.service";
-import { ResolveFraudDto } from "./dto/admin.dto";
+import { AuditQueryDto, CreateFranchiseDto, FranchisesQueryDto, PaymentsQueryDto, UpdateFranchiseDto } from "./dto/admin.dto";
+
+type Admin = { id: string };
+const SETTLED = ["CONFIRMED", "IN_TRANSIT", "DELIVERED"] as const;
+const slugify = (s: string) =>
+  s.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
 
 @Injectable()
 export class AdminService {
   constructor(
     private prisma: PrismaService,
-    private notifications: NotificationsService
+    private audit: AuditService,
+    private auth: AuthService
   ) {}
 
   async getPlatformStats() {
-    const [
-      totalUsers,
-      totalFranchises,
-      totalListings,
-      totalOrders,
-      totalRevenue,
-      totalCommissions,
-      flaggedBuybacks,
-    ] = await Promise.all([
-      this.prisma.user.count(),
+    const [totalUsers, totalFranchises, totalListings, totalOrders, gmv, totalCommissions, openFlags, pendingPayments] = await Promise.all([
+      this.prisma.user.count({ where: { deletedAt: null } }),
       this.prisma.franchise.count({ where: { status: "ACTIVE" } }),
       this.prisma.productListing.count({ where: { status: "ACTIVE" } }),
       this.prisma.order.count(),
       // GMV counts accepted sales only: cancelled and still-pending orders are not sales.
-      this.prisma.order.aggregate({
-        where: { status: { in: ["CONFIRMED", "IN_TRANSIT", "DELIVERED"] } },
-        _sum: { totalAmount: true },
-      }),
+      this.prisma.order.aggregate({ where: { status: { in: [...SETTLED] } }, _sum: { totalAmount: true } }),
       this.prisma.commission.aggregate({ _sum: { amount: true } }),
       this.prisma.buybackRequest.count({ where: { isFlagged: true, fraudResolution: null } }),
+      this.prisma.payment.count({ where: { status: { in: ["PENDING", "PROCESSING"] }, method: "ASLAN" } }),
     ]);
-
     return {
       totalUsers,
       totalFranchises,
       totalListings,
       totalOrders,
-      gmv: totalRevenue._sum.totalAmount ?? 0,
+      gmv: gmv._sum.totalAmount ?? 0,
       totalCommissions: totalCommissions._sum.amount ?? 0,
-      flaggedBuybacks,
+      flaggedBuybacks: openFlags,
+      pendingPayments,
     };
   }
 
-  async getFranchises() {
-    return this.prisma.franchise.findMany({
-      include: {
-        owner: { select: { firstName: true, lastName: true, email: true } },
-        _count: { select: { listings: true, orders: true, buybackRequests: true } },
-      },
-      orderBy: { createdAt: "desc" },
-    });
+  // ─── franchises ────────────────────────────────────────────────────────────
+
+  async listFranchises(q: FranchisesQueryDto) {
+    const search = q.search?.trim();
+    const where: Prisma.FranchiseWhereInput = {
+      ...(q.status && { status: q.status }),
+      ...(search && { OR: [{ name: { contains: search, mode: "insensitive" as const } }, { city: { contains: search, mode: "insensitive" as const } }] }),
+    };
+    const [items, total] = await Promise.all([
+      this.prisma.franchise.findMany({
+        where,
+        include: { owner: { select: { firstName: true, lastName: true, email: true } }, _count: { select: { listings: true, orders: true, buybackRequests: true } } },
+        orderBy: { createdAt: "desc" },
+        ...skipTake(q.page, q.limit),
+      }),
+      this.prisma.franchise.count({ where }),
+    ]);
+    return paginated(items, total, q.page, q.limit);
   }
 
-  async updateFranchise(franchiseId: string, data: { status?: FranchiseStatus; commissionRate?: number }) {
-    return this.prisma.franchise.update({
-      where: { id: franchiseId },
-      data,
-    });
-  }
+  /** Creates the franchise and its owner account together: both or neither. */
+  async createFranchise(admin: Admin, dto: CreateFranchiseDto) {
+    const city = await this.prisma.city.findUnique({ where: { slug: dto.citySlug } });
+    if (!city || !city.isActive) throw new NotFoundException(`Ville inconnue : ${dto.citySlug}`);
+    const passwordHash = await this.auth.hashPassword(dto.owner.password);
 
-  async getFlaggedBuybacks(status: "open" | "resolved" | "all" = "open") {
-    return this.prisma.buybackRequest.findMany({
-      where: {
-        isFlagged: true,
-        ...(status === "open" && { fraudResolution: null }),
-        ...(status === "resolved" && { fraudResolution: { not: null } }),
-      },
-      include: {
-        customer: { select: { firstName: true, lastName: true, email: true } },
-        model: { include: { brand: true } },
-        franchise: { select: { name: true } },
-        fraudReviewer: { select: { firstName: true, lastName: true } },
-      },
-      orderBy: { createdAt: "desc" },
-    });
-  }
+    return this.prisma.$transaction(async (tx) => {
+      if (await tx.user.findUnique({ where: { email: dto.owner.email } })) throw new ConflictException("Cette adresse email est déjà utilisée");
 
-  /**
-   * Closes a fraud flag. Clearing releases the request to its franchise; confirming cancels it
-   * (the customer gets a neutral message: the detection rules are not disclosed).
-   */
-  async resolveFraud(requestId: string, adminId: string, dto: ResolveFraudDto) {
-    const note = dto.note?.trim();
-    if (dto.resolution === FraudResolution.CONFIRMED_FRAUD && !note) {
-      throw new BadRequestException("Une note est requise pour confirmer une fraude");
-    }
+      const base = `${slugify(dto.name)}-${city.slug}`;
+      let slug = base;
+      for (let i = 2; await tx.franchise.findUnique({ where: { slug } }); i++) slug = `${base}-${i}`;
 
-    const request = await this.prisma.buybackRequest.findUnique({ where: { id: requestId } });
-    if (!request || !request.isFlagged) throw new NotFoundException("Demande signalée introuvable");
-
-    const cancel =
-      dto.resolution === FraudResolution.CONFIRMED_FRAUD &&
-      (request.status === BuybackStatus.PENDING || request.status === BuybackStatus.UNDER_REVIEW);
-
-    // Conditional on "still unresolved": two admins cannot both decide, and a decision is final.
-    const { count } = await this.prisma.buybackRequest.updateMany({
-      where: { id: requestId, fraudResolution: null },
-      data: {
-        fraudResolution: dto.resolution,
-        fraudNote: note ?? null,
-        fraudReviewedAt: new Date(),
-        fraudReviewedById: adminId,
-        ...(cancel && { status: BuybackStatus.CANCELLED }),
-      },
-    });
-    if (!count) throw new ConflictException("Ce signalement a déjà été traité");
-
-    if (cancel) {
-      await this.notifications.notify(request.customerId, {
-        title: "Demande de rachat non retenue",
-        body: "Votre demande de rachat n'a pas pu être acceptée.",
-        type: "buyback_update",
-        data: { buybackId: requestId },
+      const owner = await tx.user.create({
+        data: { email: dto.owner.email, passwordHash, firstName: dto.owner.firstName, lastName: dto.owner.lastName, phone: dto.owner.phone, role: Role.FRANCHISE_OWNER, isVerified: true },
+        select: { id: true },
       });
-    }
-    return this.prisma.buybackRequest.findUniqueOrThrow({ where: { id: requestId } });
+      const franchise = await tx.franchise.create({
+        data: {
+          ownerId: owner.id, name: dto.name, slug, status: "ACTIVE", commissionRate: dto.commissionRate ?? 0.15,
+          address: dto.address, city: city.name, cityId: city.id, region: city.region, latitude: city.latitude, longitude: city.longitude, phoneNumber: dto.phoneNumber,
+        },
+      });
+      await this.audit.record({ actor: { id: admin.id, role: Role.ADMIN }, action: AuditAction.FRANCHISE_CREATED, entity: "Franchise", entityId: franchise.id, metadata: { owner: owner.id, commissionRate: franchise.commissionRate } }, tx);
+      return franchise;
+    });
   }
 
-  async getAllOrders() {
-    return this.prisma.order.findMany({
-      include: {
-        customer: { select: { firstName: true, lastName: true, email: true } },
-        franchise: { select: { name: true, city: true } },
-        items: { include: { listing: { select: { title: true, listingPrice: true } } } },
-        payment: true,
-      },
-      orderBy: { createdAt: "desc" },
-      take: 100,
+  async updateFranchise(admin: Admin, id: string, dto: UpdateFranchiseDto) {
+    return this.prisma.$transaction(async (tx) => {
+      const before = await tx.franchise.findUnique({ where: { id } });
+      if (!before) throw new NotFoundException("Franchise introuvable");
+      const after = await tx.franchise.update({ where: { id }, data: dto });
+
+      const changed: Record<string, { from: unknown; to: unknown }> = {};
+      for (const k of Object.keys(dto) as (keyof UpdateFranchiseDto)[]) {
+        if (before[k] !== after[k]) changed[k] = { from: before[k], to: after[k] };
+      }
+      if (Object.keys(changed).length) {
+        await this.audit.record({ actor: { id: admin.id, role: Role.ADMIN }, action: AuditAction.FRANCHISE_UPDATED, entity: "Franchise", entityId: id, metadata: changed as Prisma.InputJsonValue }, tx);
+      }
+      return after;
     });
+  }
+
+  // ─── transactions & audit ──────────────────────────────────────────────────
+
+  async listPayments(q: PaymentsQueryDto) {
+    const search = q.search?.trim();
+    const where: Prisma.PaymentWhereInput = {
+      ...(q.status && { status: q.status }),
+      ...(q.method && { method: q.method }),
+      ...((q.from || q.to) && { createdAt: { ...(q.from && { gte: new Date(q.from) }), ...(q.to && { lte: new Date(q.to) }) } }),
+      ...(search && {
+        OR: [
+          { user: { email: { contains: search, mode: "insensitive" as const } } },
+          { orderId: { endsWith: search } },
+          { gatewayRef: { contains: search } },
+        ],
+      }),
+    };
+    const [items, total, totals] = await Promise.all([
+      this.prisma.payment.findMany({
+        where,
+        select: {
+          id: true, orderId: true, method: true, status: true, amount: true, currency: true, gatewayRef: true, paidAt: true, createdAt: true,
+          user: { select: { email: true } }, order: { select: { status: true, franchise: { select: { name: true } } } },
+        },
+        orderBy: { createdAt: "desc" },
+        ...skipTake(q.page, q.limit),
+      }),
+      this.prisma.payment.count({ where }),
+      this.prisma.payment.aggregate({ where: { ...where, status: "COMPLETED" }, _sum: { amount: true } }),
+    ]);
+    return { ...paginated(items, total, q.page, q.limit), completedAmount: totals._sum.amount ?? 0 };
+  }
+
+  async listAudit(q: AuditQueryDto) {
+    const where: Prisma.AuditLogWhereInput = {
+      ...(q.action && { action: q.action }),
+      ...(q.entity && { entity: q.entity }),
+      ...(q.entityId && { entityId: q.entityId }),
+      ...(q.actorId && { actorId: q.actorId }),
+      ...((q.from || q.to) && { createdAt: { ...(q.from && { gte: new Date(q.from) }), ...(q.to && { lte: new Date(q.to) }) } }),
+    };
+    const [items, total] = await Promise.all([
+      this.prisma.auditLog.findMany({ where, include: { actor: { select: { email: true, firstName: true, lastName: true } } }, orderBy: { createdAt: "desc" }, ...skipTake(q.page, q.limit) }),
+      this.prisma.auditLog.count({ where }),
+    ]);
+    return paginated(items, total, q.page, q.limit);
   }
 }

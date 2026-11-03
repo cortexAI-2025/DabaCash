@@ -3,6 +3,7 @@ import {
   RawBodyRequest, Req, UseGuards,
 } from "@nestjs/common";
 import { ApiBearerAuth, ApiOperation, ApiTags } from "@nestjs/swagger";
+import { SkipThrottle } from "@nestjs/throttler";
 import { Request } from "express";
 import { Role } from "@dabacash/database";
 import { JwtAuthGuard } from "../common/guards/jwt-auth.guard";
@@ -40,6 +41,7 @@ export class PaymentsController {
   }
 
   @Post("aslan/webhook")
+  @SkipThrottle() // authenticated by its signature; a payment provider retrying must never be rate-limited
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: "Aslan webhook receiver (HMAC-signed, public)" })
   async webhook(

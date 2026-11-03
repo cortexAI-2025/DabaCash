@@ -16,13 +16,16 @@ import {
   Prisma,
   Role,
 } from "@dabacash/database";
+import { AuditAction, AuditService } from "../audit/audit.service";
+import { paginated, skipTake } from "../common/pagination";
 import { PrismaService } from "../common/prisma/prisma.service";
-import { CreateOrderDto } from "./dto/order.dto";
+import { AdminOrderQueryDto, CreateOrderDto, OrderListQueryDto } from "./dto/order.dto";
 import { recordCommission } from "./commission";
+import { lockOrder } from "./order-lock";
 import { RealtimeService } from "../realtime/realtime.service";
 import { NotificationsService } from "../notifications/notifications.service";
 
-const { PENDING, CONFIRMED, IN_TRANSIT, DELIVERED, CANCELLED, REFUNDED } = OrderStatus;
+const { PENDING, CONFIRMED, IN_TRANSIT, DELIVERED, CANCELLED } = OrderStatus;
 
 // Refunds are handled outside this endpoint (Aslan dashboard), so REFUNDED is terminal here.
 const ALLOWED_TRANSITIONS: Record<OrderStatus, OrderStatus[]> = {
@@ -41,6 +44,17 @@ const CASH_HOLD_MS = 48 * 60 * 60 * 1000;
 
 type OrderItemRow = { listingId: string; quantity: number };
 
+// A listing as the buyer sees it: no purchase price (the franchise's margin), no model baseline.
+const BUYER_LISTING = {
+  select: { id: true, title: true, images: true, condition: true, listingPrice: true, warrantyMonths: true, deviceModel: { select: { name: true, brand: { select: { name: true } } } } },
+} as const;
+
+const ORDER_VIEW = {
+  items: { include: { listing: BUYER_LISTING } },
+  payment: true,
+  franchise: { select: { name: true, city: true, address: true } },
+} satisfies Prisma.OrderInclude;
+
 const ORDER_NOTICE: Partial<Record<OrderStatus, { title: string; body: string }>> = {
   CONFIRMED: { title: "Commande confirmée", body: "Votre commande a été confirmée par la franchise." },
   IN_TRANSIT: { title: "Commande en route", body: "Votre commande est en cours de livraison." },
@@ -55,12 +69,16 @@ export class OrdersService {
   constructor(
     private prisma: PrismaService,
     private realtime: RealtimeService,
-    private notifications: NotificationsService
+    private notifications: NotificationsService,
+    private audit: AuditService
   ) {}
 
-  async create(customerId: string, dto: CreateOrderDto) {
-    if (dto.deliveryMethod === DeliveryMethod.COURIER && !dto.deliveryAddress) {
-      throw new BadRequestException("Une adresse de livraison est requise");
+  async create(customerId: string, dto: CreateOrderDto, idempotencyKey?: string) {
+    if (dto.deliveryMethod === DeliveryMethod.COURIER) {
+      if (!dto.deliveryAddress) throw new BadRequestException("Une adresse de livraison est requise");
+      if (dto.paymentMethod !== PaymentMethod.ASLAN) {
+        throw new BadRequestException("La livraison à domicile nécessite un paiement en ligne");
+      }
     }
 
     const ids = dto.items.map((i) => i.listingId);
@@ -90,6 +108,17 @@ export class OrdersService {
     const created = await this.prisma.$transaction(async (tx) => {
       // Lock the stock rows so two concurrent checkouts cannot both reserve the last unit.
       await this.lockInventory(tx, ids);
+
+      // Checked after the lock is held: a concurrent duplicate waits here until the first request
+      // has committed, then returns that order instead of failing on "insufficient stock".
+      if (idempotencyKey) {
+        const existing = await tx.order.findUnique({
+          where: { customerId_idempotencyKey: { customerId, idempotencyKey } },
+          include: ORDER_VIEW,
+        });
+        if (existing) return { order: existing, replay: true };
+      }
+
       const inventories = await tx.inventory.findMany({ where: { listingId: { in: ids } } });
 
       for (const item of dto.items) {
@@ -110,9 +139,10 @@ export class OrdersService {
           customerId,
           franchiseId,
           deliveryMethod: dto.deliveryMethod,
-          deliveryAddress: dto.deliveryAddress,
+          deliveryAddress: dto.deliveryAddress ? { ...dto.deliveryAddress } : undefined,
           totalAmount,
           notes: dto.notes,
+          idempotencyKey,
           items: {
             create: dto.items.map((item) => {
               const listing = byId.get(item.listingId)!;
@@ -128,11 +158,7 @@ export class OrdersService {
             create: { userId: customerId, method: dto.paymentMethod, amount: totalAmount },
           },
         },
-        include: {
-          items: { include: { listing: { include: { deviceModel: { include: { brand: true } } } } } },
-          payment: true,
-          franchise: { select: { name: true, city: true, address: true } },
-        },
+        include: ORDER_VIEW,
       });
 
       for (const item of dto.items) {
@@ -141,51 +167,64 @@ export class OrdersService {
           data: { reserved: { increment: item.quantity } },
         });
       }
-      return order;
+      return { order, replay: false };
     });
 
-    await this.realtime.publishStock(ids);
-    return created;
+    if (!created.replay) await this.realtime.publishStock(ids);
+    return created.order;
   }
 
-  async findByCustomer(customerId: string) {
-    return this.prisma.order.findMany({
-      where: { customerId },
-      include: {
-        items: { include: { listing: { include: { deviceModel: { include: { brand: true } } } } } },
-        payment: true,
-        franchise: { select: { name: true, city: true } },
-      },
-      orderBy: { createdAt: "desc" },
-    });
+  async findByCustomer(customerId: string, q: OrderListQueryDto) {
+    const where: Prisma.OrderWhereInput = { customerId, ...(q.status && { status: q.status }) };
+    const [items, total] = await Promise.all([
+      this.prisma.order.findMany({ where, include: ORDER_VIEW, orderBy: { createdAt: "desc" }, ...skipTake(q.page, q.limit) }),
+      this.prisma.order.count({ where }),
+    ]);
+    return paginated(items, total, q.page, q.limit);
   }
 
-  async findByFranchise(franchiseOwnerId: string) {
-    const franchise = await this.prisma.franchise.findUniqueOrThrow({
-      where: { ownerId: franchiseOwnerId },
-    });
-    return this.prisma.order.findMany({
-      where: { franchiseId: franchise.id },
-      include: {
-        customer: { select: { firstName: true, lastName: true, email: true, phone: true } },
-        items: { include: { listing: true } },
-        payment: true,
-      },
-      orderBy: { createdAt: "desc" },
-    });
+  async findByFranchise(franchiseOwnerId: string, q: OrderListQueryDto) {
+    const franchise = await this.prisma.franchise.findUniqueOrThrow({ where: { ownerId: franchiseOwnerId } });
+    const where: Prisma.OrderWhereInput = { franchiseId: franchise.id, ...(q.status && { status: q.status }) };
+    const [items, total] = await Promise.all([
+      this.prisma.order.findMany({
+        where,
+        include: {
+          customer: { select: { firstName: true, lastName: true, email: true, phone: true } },
+          items: { include: { listing: true } },
+          payment: true,
+        },
+        orderBy: { createdAt: "desc" },
+        ...skipTake(q.page, q.limit),
+      }),
+      this.prisma.order.count({ where }),
+    ]);
+    return paginated(items, total, q.page, q.limit);
   }
 
-  async findAll() {
-    return this.prisma.order.findMany({
-      include: {
-        customer: { select: { firstName: true, lastName: true, email: true } },
-        franchise: { select: { name: true, city: true } },
-        items: { include: { listing: { select: { title: true, listingPrice: true } } } },
-        payment: true,
-      },
-      orderBy: { createdAt: "desc" },
-      take: 200,
-    });
+  async findAll(q: AdminOrderQueryDto) {
+    const search = q.search?.trim();
+    const where: Prisma.OrderWhereInput = {
+      ...(q.status && { status: q.status }),
+      ...(q.paymentStatus && { payment: { is: { status: q.paymentStatus } } }),
+      ...((q.from || q.to) && { createdAt: { ...(q.from && { gte: new Date(q.from) }), ...(q.to && { lte: new Date(q.to) }) } }),
+      ...(search && { OR: [{ id: { endsWith: search } }, { customer: { email: { contains: search, mode: "insensitive" as const } } }] }),
+    };
+    const [items, total] = await Promise.all([
+      this.prisma.order.findMany({
+        where,
+        include: {
+          customer: { select: { firstName: true, lastName: true, email: true } },
+          franchise: { select: { name: true, city: true } },
+          items: { include: { listing: { select: { title: true, listingPrice: true } } } },
+          payment: true,
+        },
+        orderBy: { createdAt: "desc" },
+        ...skipTake(q.page, q.limit),
+      }),
+      this.prisma.order.count({ where }),
+    ]);
+    return paginated(items, total, q.page, q.limit);
   }
 
   /**
@@ -194,18 +233,31 @@ export class OrdersService {
    */
   async updateStatus(orderId: string, next: OrderStatus, actor: { id: string; role: Role }) {
     const result = await this.prisma.$transaction(async (tx) => {
+      // Row lock first, always: a payment webhook, the expiry sweeper and a user action on the
+      // same order are serialised, so none of them can act on a state that just changed.
+      await lockOrder(tx, orderId);
+
       const order = await tx.order.findUnique({
         where: { id: orderId },
         include: { items: true, payment: true, franchise: { select: { ownerId: true } } },
       });
       if (!order) throw new NotFoundException("Commande introuvable");
-      if (actor.role === Role.FRANCHISE_OWNER && order.franchise.ownerId !== actor.id) {
+
+      const byCustomer = actor.role === Role.CUSTOMER;
+      if (byCustomer) {
+        if (order.customerId !== actor.id) throw new NotFoundException("Commande introuvable"); // do not reveal it exists
+        if (next !== CANCELLED) throw new ForbiddenException("Action non autorisée");
+        if (order.payment?.status === PaymentStatus.COMPLETED || order.payment?.status === PaymentStatus.PROCESSING) {
+          throw new ConflictException("Un paiement est en cours ou effectué : contactez la franchise");
+        }
+      } else if (actor.role === Role.FRANCHISE_OWNER && order.franchise.ownerId !== actor.id) {
         throw new ForbiddenException("Cette commande appartient à une autre franchise");
       }
 
       if (!ALLOWED_TRANSITIONS[order.status].includes(next)) {
         throw new ConflictException(`Transition ${order.status} → ${next} interdite`);
       }
+      if (byCustomer && order.status !== PENDING) throw new ConflictException("Seule une commande en attente peut être annulée");
 
       const paid = order.payment?.status === PaymentStatus.COMPLETED;
       const inStore = order.payment?.method === PaymentMethod.CASH;
@@ -218,10 +270,12 @@ export class OrdersService {
         throw new ConflictException("Commande payée : rembourser avant d'annuler");
       }
 
-      await tx.order.update({
-        where: { id: orderId },
+      // Belt and braces next to the row lock: the move only applies from the state we validated.
+      const { count } = await tx.order.updateMany({
+        where: { id: orderId, status: order.status },
         data: { status: next, ...(next === DELIVERED && { deliveredAt: new Date() }) },
       });
+      if (!count) throw new ConflictException("La commande a été modifiée entre-temps, réessayez");
 
       if (next === CANCELLED) {
         await this.releaseStock(tx, order.items);
@@ -236,17 +290,25 @@ export class OrdersService {
         if (paid || inStore) await recordCommission(tx, orderId);
       }
 
-      const updated = await tx.order.findUniqueOrThrow({
-        where: { id: orderId },
-        include: { items: true, payment: true },
-      });
+      await this.audit.record(
+        {
+          actor,
+          action: byCustomer ? AuditAction.ORDER_CANCELLED_BY_CUSTOMER : AuditAction.ORDER_STATUS_CHANGED,
+          entity: "Order",
+          entityId: orderId,
+          metadata: { from: order.status, to: next },
+        },
+        tx
+      );
+
+      const updated = await tx.order.findUniqueOrThrow({ where: { id: orderId }, include: { items: true, payment: true } });
       return { updated, customerId: order.customerId, listingIds: order.items.map((i) => i.listingId) };
     });
 
     // After commit: listeners and the customer only ever see state that is really persisted.
     if (next === CANCELLED || next === DELIVERED) await this.realtime.publishStock(result.listingIds);
     const notice = ORDER_NOTICE[next];
-    if (notice) {
+    if (notice && actor.role !== Role.CUSTOMER) {
       await this.notifications.notify(result.customerId, { ...notice, type: "order_update", data: { orderId } });
     }
     return result.updated;
@@ -299,16 +361,26 @@ export class OrdersService {
     return expired;
   }
 
-  async findById(orderId: string) {
-    return this.prisma.order.findUniqueOrThrow({
+  /** Visible to the customer who placed it, the franchise that fulfils it, and admins. Anyone else gets a 404. */
+  async findById(orderId: string, actor: { id: string; role: Role }) {
+    const order = await this.prisma.order.findUnique({
       where: { id: orderId },
       include: {
         customer: { select: { firstName: true, lastName: true, email: true } },
-        items: { include: { listing: { include: { deviceModel: { include: { brand: true } } } } } },
+        items: { include: { listing: BUYER_LISTING } },
         payment: true,
-        franchise: { select: { name: true, city: true, address: true, phoneNumber: true } },
+        franchise: { select: { name: true, city: true, address: true, phoneNumber: true, ownerId: true } },
       },
     });
+    const allowed =
+      !!order &&
+      (actor.role === Role.ADMIN ||
+        order.customerId === actor.id ||
+        (actor.role === Role.FRANCHISE_OWNER && order.franchise.ownerId === actor.id));
+    if (!order || !allowed) throw new NotFoundException("Commande introuvable");
+
+    const { ownerId: _omit, ...franchise } = order.franchise;
+    return { ...order, franchise };
   }
 
   private lockInventory(tx: Prisma.TransactionClient, listingIds: string[]) {

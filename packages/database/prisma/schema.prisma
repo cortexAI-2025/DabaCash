@@ -107,11 +107,17 @@ model User {
   isVerified     Boolean   @default(false)
   isActive       Boolean   @default(true)
   lastLoginAt    DateTime?
+  failedLoginCount  Int       @default(0)
+  lockedUntil       DateTime?          // temporary lockout after repeated failed logins
+  passwordChangedAt DateTime?          // access tokens issued before this are rejected
+  deletedAt         DateTime?          // set when the account was anonymised (right to erasure)
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
 
   // Relations
   franchise       Franchise?
+  auditLogs       AuditLog[]        @relation("AuditActor")
+  blockedImeis    BlockedImei[]
   buybackRequests BuybackRequest[]
   fraudReviews    BuybackRequest[]  @relation("FraudReviewer")
   orders          Order[]           @relation("CustomerOrders")
@@ -125,7 +131,7 @@ model User {
 model Session {
   id           String   @id @default(cuid())
   userId       String
-  refreshToken String   @unique
+  refreshTokenHash String @unique   // sha256 of the refresh token; the token itself is never stored
   userAgent    String?
   ipAddress    String?
   expiresAt    DateTime
@@ -321,6 +327,7 @@ model BuybackRequest {
   fraudNote       String?
   fraudReviewedAt DateTime?
   fraudReviewedById String?
+  idempotencyKey  String?       // client-supplied; a retried request returns the original
 
   // Scheduling
   preferredDate   DateTime?
@@ -340,6 +347,7 @@ model BuybackRequest {
   @@index([customerId])
   @@index([franchiseId])
   @@index([status])
+  @@unique([customerId, idempotencyKey])
   @@index([isFlagged, fraudResolution])
   @@index([imei])
   @@map("buyback_requests")
@@ -358,6 +366,7 @@ model Order {
   totalAmount    Float
   notes          String?
   trackingNumber String?
+  idempotencyKey String?        // client-supplied; a retried request returns the original order
   createdAt      DateTime       @default(now())
   updatedAt      DateTime       @updatedAt
   deliveredAt    DateTime?
@@ -369,6 +378,7 @@ model Order {
   payment   Payment?
   commission Commission?
 
+  @@unique([customerId, idempotencyKey])
   @@index([customerId])
   @@index([franchiseId])
   @@index([status])
@@ -471,4 +481,40 @@ model Notification {
 
   @@index([userId])
   @@map("notifications")
+}
+
+// ─── Audit trail (append-only) ───────────────────────────────────────────────
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  actorId   String?
+  actorRole Role?
+  action    String             // e.g. USER_ROLE_CHANGED, FRAUD_RESOLVED
+  entity    String?            // e.g. User, Order, BuybackRequest
+  entityId  String?
+  metadata  Json?              // before/after values and reasons; never secrets or full PII
+  ip        String?
+  createdAt DateTime @default(now())
+
+  actor User? @relation("AuditActor", fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([createdAt])
+  @@index([action])
+  @@index([entity, entityId])
+  @@index([actorId])
+  @@map("audit_logs")
+}
+
+// ─── IMEI blocklist ─────────────────────────────────────────────────────────
+
+model BlockedImei {
+  id          String   @id @default(cuid())
+  imei        String   @unique
+  reason      String
+  createdById String?
+  createdAt   DateTime @default(now())
+
+  createdBy User? @relation(fields: [createdById], references: [id], onDelete: SetNull)
+
+  @@map("blocked_imeis")
 }

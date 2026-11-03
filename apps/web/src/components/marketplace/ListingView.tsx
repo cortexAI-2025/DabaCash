@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import Image from "next/image";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useMutation, useQuery } from "@tanstack/react-query";
@@ -8,6 +8,9 @@ import { Loader2, MapPin, Shield, Store, Truck, CreditCard, Banknote } from "luc
 import toast from "react-hot-toast";
 import { citiesApi, marketplaceApi, ordersApi, paymentsApi } from "@/lib/api";
 import { cn, formatPrice, CONDITION_LABELS } from "@/lib/utils";
+import { apiMessage, errorStatus } from "@/lib/errors";
+import { newIdempotencyKey } from "@/lib/idempotency";
+import { QueryState } from "@/components/ui/QueryState";
 
 type Delivery = "DROP_IN_STORE" | "COURIER";
 type Pay = "ASLAN" | "CASH";
@@ -20,8 +23,10 @@ export function ListingView() {
   const [payment, setPayment] = useState<Pay>("ASLAN");
   const [citySlug, setCitySlug] = useState("");
   const [address, setAddress] = useState("");
+  // Same key for every attempt of this purchase: a double click or retry returns the same order.
+  const orderKey = useRef<string | null>(null);
 
-  const { data: listing, isLoading } = useQuery({
+  const { data: listing, isLoading, isError, error, refetch } = useQuery({
     queryKey: ["listing", id],
     queryFn: () => marketplaceApi.getListing(id!).then((r) => r.data),
     enabled: !!id,
@@ -35,13 +40,14 @@ export function ListingView() {
   const buy = useMutation({
     mutationFn: async () => {
       const city = cities?.find((c: any) => c.slug === citySlug);
+      orderKey.current ??= newIdempotencyKey();
       const { data: order } = await ordersApi.create({
         items: [{ listingId: id, quantity: 1 }],
         deliveryMethod: delivery,
         deliveryAddress:
           delivery === "COURIER" ? { address, city: city?.name, region: city?.region } : undefined,
         paymentMethod: payment,
-      });
+      }, orderKey.current);
       if (payment === "ASLAN") {
         const { data } = await paymentsApi.startAslanCheckout(order.id);
         return { orderId: order.id as string, checkoutUrl: data.checkoutUrl };
@@ -52,20 +58,21 @@ export function ListingView() {
       if (checkoutUrl) window.location.href = checkoutUrl; // Aslan hosted page
       else router.push(`/payment/result?order=${orderId}&status=success`);
     },
-    onError: (err: any) => {
-      if (err.response?.status === 401) {
+    onError: (err) => {
+      if (errorStatus(err) === 401) {
         toast.error("Connectez-vous pour acheter");
-        router.push("/login");
+        router.push(`/login?next=${encodeURIComponent(`/listing?id=${id}`)}`);
       } else {
-        toast.error(err.response?.data?.message ?? "Impossible de passer la commande");
+        toast.error(apiMessage(err, "Impossible de passer la commande"));
       }
     },
   });
 
-  if (isLoading || !listing) {
+  if (!id) return <div className="mx-auto max-w-xl px-4 py-24"><QueryState isLoading={false} isError error={null} onRetry={undefined}><></></QueryState></div>;
+  if (isLoading || isError || !listing) {
     return (
-      <div className="flex justify-center py-32">
-        <Loader2 className="h-8 w-8 animate-spin text-gold-500" />
+      <div className="mx-auto max-w-xl px-4 py-24">
+        <QueryState isLoading={isLoading} isError={isError} error={error} onRetry={() => refetch()}><></></QueryState>
       </div>
     );
   }
@@ -106,8 +113,8 @@ export function ListingView() {
 
         <div className="card space-y-5">
           <div>
-            <label className="label">Réception</label>
-            <div className="grid grid-cols-2 gap-3">
+            <span className="label" id="recv-label">Réception</span>
+            <div className="grid grid-cols-2 gap-3" role="group" aria-labelledby="recv-label">
               {([
                 ["DROP_IN_STORE", Store, "Retrait en franchise"],
                 ["COURIER", Truck, "Livraison"],
@@ -115,6 +122,7 @@ export function ListingView() {
                 <button
                   key={value}
                   type="button"
+                  aria-pressed={delivery === value}
                   onClick={() => {
                     setDelivery(value);
                     if (value === "COURIER" && payment === "CASH") setPayment("ASLAN");
@@ -132,7 +140,7 @@ export function ListingView() {
 
           {needsAddress && (
             <div className="space-y-3">
-              <select className="input" value={citySlug} onChange={(e) => setCitySlug(e.target.value)}>
+              <select className="input" aria-label="Ville de livraison" value={citySlug} onChange={(e) => setCitySlug(e.target.value)}>
                 <option value="">Ville de livraison</option>
                 {cities?.map((c: any) => (
                   <option key={c.slug} value={c.slug}>{c.name}</option>
@@ -140,7 +148,7 @@ export function ListingView() {
               </select>
               <input
                 className="input"
-                placeholder="Adresse complète"
+                aria-label="Adresse complète" placeholder="Adresse complète"
                 value={address}
                 onChange={(e) => setAddress(e.target.value)}
               />
@@ -148,10 +156,11 @@ export function ListingView() {
           )}
 
           <div>
-            <label className="label">Paiement</label>
-            <div className="space-y-2">
+            <span className="label" id="pay-label">Paiement</span>
+            <div className="space-y-2" role="group" aria-labelledby="pay-label">
               <button
                 type="button"
+                aria-pressed={payment === "ASLAN"}
                 onClick={() => setPayment("ASLAN")}
                 className={cn(
                   "flex w-full items-start gap-3 rounded-xl border p-3 text-left transition-all",
@@ -167,6 +176,7 @@ export function ListingView() {
               {delivery === "DROP_IN_STORE" && (
                 <button
                   type="button"
+                  aria-pressed={payment === "CASH"}
                   onClick={() => setPayment("CASH")}
                   className={cn(
                     "flex w-full items-start gap-3 rounded-xl border p-3 text-left transition-all",

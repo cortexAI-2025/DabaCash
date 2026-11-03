@@ -3,8 +3,13 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { adminApi } from "@/lib/api";
 import { formatDate } from "@/lib/utils";
-import { Loader2, CheckCircle, XCircle, Store } from "lucide-react";
+import { CheckCircle, XCircle } from "lucide-react";
+import { useState } from "react";
 import toast from "react-hot-toast";
+import { apiMessage } from "@/lib/errors";
+import { QueryState } from "@/components/ui/QueryState";
+import { Pager } from "@/components/ui/Pager";
+import { CreateFranchiseForm } from "@/components/admin/CreateFranchiseForm";
 
 const STATUS_LABELS: Record<string, { label: string; cls: string }> = {
   ACTIVE: { label: "Actif", cls: "badge-green" },
@@ -16,29 +21,33 @@ const STATUS_LABELS: Record<string, { label: string; cls: string }> = {
 export default function AdminFranchisesPage() {
   const qc = useQueryClient();
 
-  const { data: franchises, isLoading } = useQuery({
-    queryKey: ["admin-franchises"],
-    queryFn: () => adminApi.getFranchises().then((r) => r.data),
+  const [page, setPage] = useState(1);
+  const [creating, setCreating] = useState(false);
+  const q = useQuery({
+    queryKey: ["admin-franchises", page],
+    queryFn: () => adminApi.getFranchises({ page, limit: 20 }).then((r) => r.data),
   });
+  const franchises = q.data?.items;
 
   const updateMutation = useMutation({
     mutationFn: ({ id, data }: { id: string; data: any }) => adminApi.updateFranchise(id, data),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ["admin-franchises"] }); toast.success("Mis à jour"); },
-    onError: () => toast.error("Erreur"),
+    onError: (e) => toast.error(apiMessage(e)),
   });
-
-  if (isLoading) {
-    return <div className="flex justify-center py-20"><Loader2 className="h-8 w-8 animate-spin text-gold-500" /></div>;
-  }
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-black text-dark-50">Gestion des franchises</h1>
-        <p className="text-dark-400 mt-1">{franchises?.length ?? 0} franchises enregistrées</p>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h1 className="text-2xl font-black text-dark-50">Gestion des franchises</h1>
+          <p className="text-dark-400 mt-1">{q.data?.pagination.total ?? 0} franchises enregistrées</p>
+        </div>
+        {!creating && <button className="btn-primary px-4 py-2 text-sm" onClick={() => setCreating(true)}>+ Nouvelle franchise</button>}
       </div>
+      {creating && <CreateFranchiseForm onDone={() => setCreating(false)} />}
 
-      <div className="card overflow-hidden p-0">
+      <QueryState isLoading={q.isLoading} isError={q.isError} error={q.error} isEmpty={franchises?.length === 0} emptyTitle="Aucune franchise enregistrée" onRetry={() => q.refetch()}>
+      <div className="card overflow-x-auto p-0">
         <table className="w-full text-sm">
           <thead className="border-b border-dark-800">
             <tr>
@@ -69,7 +78,7 @@ export default function AdminFranchisesPage() {
                   <td className="px-4 py-4">
                     <div className="flex items-center gap-2">
                       {f.status !== "ACTIVE" && (
-                        <button
+                        <button aria-label="Activer la franchise"
                           className="btn-ghost py-1 px-2 text-xs text-emerald-400"
                           onClick={() => updateMutation.mutate({ id: f.id, data: { status: "ACTIVE" } })}
                         >
@@ -77,7 +86,7 @@ export default function AdminFranchisesPage() {
                         </button>
                       )}
                       {f.status === "ACTIVE" && (
-                        <button
+                        <button aria-label="Suspendre la franchise"
                           className="btn-ghost py-1 px-2 text-xs text-red-400"
                           onClick={() => updateMutation.mutate({ id: f.id, data: { status: "SUSPENDED" } })}
                         >
@@ -91,13 +100,9 @@ export default function AdminFranchisesPage() {
             })}
           </tbody>
         </table>
-        {franchises?.length === 0 && (
-          <div className="py-16 text-center text-dark-400">
-            <Store className="h-10 w-10 mx-auto mb-4 opacity-50" />
-            <p>Aucune franchise enregistrée</p>
-          </div>
-        )}
       </div>
+      {q.data && <Pager page={page} totalPages={q.data.pagination.totalPages} total={q.data.pagination.total} onChange={setPage} />}
+      </QueryState>
     </div>
   );
 }

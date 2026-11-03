@@ -10,6 +10,8 @@ import { PaymentMethod, PaymentStatus, OrderStatus, Role } from "@dabacash/datab
 import { PrismaService } from "../common/prisma/prisma.service";
 import { AslanClient, AslanWebhookEvent } from "./aslan.client";
 import { recordCommission } from "../orders/commission";
+import { lockOrder } from "../orders/order-lock";
+import { AuditAction, AuditService } from "../audit/audit.service";
 import { NotificationsService } from "../notifications/notifications.service";
 
 const SESSION_REUSE_MARGIN_MS = 60_000;
@@ -22,7 +24,8 @@ export class PaymentsService {
     private prisma: PrismaService,
     private aslan: AslanClient,
     private config: ConfigService,
-    private notifications: NotificationsService
+    private notifications: NotificationsService,
+    private audit: AuditService
   ) {}
 
   /** Creates (or reuses a still-valid) Aslan hosted checkout for an order and returns its URL. */
@@ -159,6 +162,10 @@ export class PaymentsService {
   /** Returns true only the first time a payment is settled on a pending order. */
   private async markPaid(paymentId: string, orderId: string, event: AslanWebhookEvent): Promise<boolean> {
     return this.prisma.$transaction(async (tx) => {
+      // Same lock order as every other order mutation (order row first): a concurrent
+      // cancellation or expiry is fully before or fully after this settlement, never interleaved.
+      await lockOrder(tx, orderId);
+
       // Conditional update makes webhook retries/duplicates idempotent.
       const { count } = await tx.payment.updateMany({
         where: { id: paymentId, status: { not: PaymentStatus.COMPLETED } },
@@ -171,11 +178,13 @@ export class PaymentsService {
         data: { status: OrderStatus.CONFIRMED },
       });
       if (!confirmed) {
-        // Paid after the hold expired or the order was cancelled: the money is taken, so refund it.
+        // Paid after the hold expired or the order was cancelled: the money is taken, so it must be refunded.
         this.logger.error(`Payment ${paymentId} completed on a non-pending order ${orderId}: REFUND REQUIRED`);
+        await this.audit.record({ action: AuditAction.PAYMENT_LATE_REFUND_REQUIRED, entity: "Order", entityId: orderId, metadata: { paymentId } }, tx);
         return false;
       }
       await recordCommission(tx, orderId);
+      await this.audit.record({ action: AuditAction.PAYMENT_SETTLED, entity: "Order", entityId: orderId, metadata: { paymentId } }, tx);
       return true;
     });
   }

@@ -2,8 +2,9 @@
 
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { ArrowDownRight, ArrowUpRight, Loader2, Minus } from "lucide-react";
-import { adminApi } from "@/lib/api";
+import { ArrowDownRight, ArrowUpRight, Minus } from "lucide-react";
+import { adminApi, franchiseApi } from "@/lib/api";
+import { QueryState } from "@/components/ui/QueryState";
 import { cn, formatPrice } from "@/lib/utils";
 import { CategoryMarginChart, DailyGmvChart } from "./AnalyticsCharts";
 
@@ -35,19 +36,20 @@ function Tile({ label, value, hero, wide, children }: { label: string; value: st
 const days = (v: number) => (v < 1 ? "< 1 j" : `${v.toFixed(1)} j`);
 const pct = (v: number) => `${Math.round(v * 100)} %`;
 
-export function AnalyticsView() {
+export function AnalyticsView({ scope = "admin" }: { scope?: "admin" | "franchise" }) {
   const [period, setPeriod] = useState<number>(30);
-  const { data, isLoading, isError } = useQuery({
-    queryKey: ["admin-analytics", period],
-    queryFn: () => adminApi.getAnalytics(period).then((r) => r.data),
+  const q = useQuery({
+    queryKey: [`${scope}-analytics`, period],
+    queryFn: () => (scope === "admin" ? adminApi.getAnalytics(period) : franchiseApi.getAnalytics(period)).then((r) => r.data),
   });
+  const data = q.data;
 
   return (
     <div className="space-y-8">
       <div className="flex flex-wrap items-end justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-black text-dark-50">Analytics</h1>
-          <p className="mt-1 text-dark-400">Performance de la plateforme</p>
+          <h1 className="text-2xl font-black text-dark-50">{scope === "admin" ? "Analytics" : "Statistiques"}</h1>
+          <p className="mt-1 text-dark-400">{scope === "admin" ? "Performance de la plateforme" : "Performance de votre franchise"}</p>
         </div>
         <div className="flex rounded-xl border border-dark-700 p-1" role="group" aria-label="Période">
           {PERIODS.map((p) => (
@@ -63,8 +65,7 @@ export function AnalyticsView() {
         </div>
       </div>
 
-      {isLoading && <div className="flex justify-center py-24"><Loader2 className="h-8 w-8 animate-spin text-gold-500" /></div>}
-      {isError && <p className="card text-center text-red-400">Impossible de charger les statistiques.</p>}
+      {(q.isLoading || q.isError) && <QueryState isLoading={q.isLoading} isError={q.isError} error={q.error} onRetry={() => q.refetch()}><></></QueryState>}
 
       {data && (
         <>

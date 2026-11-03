@@ -1,85 +1,50 @@
+import { Transform } from "class-transformer";
 import {
-  IsString, IsEnum, IsNumber, IsOptional, IsArray,
-  IsBoolean, Min, IsInt
+  ArrayMaxSize, IsArray, IsBoolean, IsEnum, IsIn, IsInt, IsOptional, IsString, IsUrl, Length, Max, MaxLength, Min,
 } from "class-validator";
-import { ApiProperty } from "@nestjs/swagger";
+import { ApiProperty, ApiPropertyOptional } from "@nestjs/swagger";
 import { Condition, ListingStatus } from "@dabacash/database";
+import { PaginationQueryDto } from "../../common/pagination";
+
+const trim = ({ value }: { value: unknown }) => (typeof value === "string" ? value.trim() : value);
+
+// Franchises may only move a listing between these states; SOLD/RESERVED are set by the system.
+export const FRANCHISE_LISTING_STATUSES = [ListingStatus.ACTIVE, ListingStatus.DRAFT, ListingStatus.ARCHIVED] as const;
 
 export class CreateListingDto {
-  @ApiProperty()
-  @IsString()
-  deviceModelId: string;
+  @ApiProperty() @IsString() @Length(1, 50) deviceModelId: string;
+  @ApiProperty({ enum: Condition }) @IsEnum(Condition) condition: Condition;
 
-  @ApiProperty({ enum: Condition })
-  @IsEnum(Condition)
-  condition: Condition;
+  @ApiProperty() @Transform(trim) @IsString() @Length(5, 150) title: string;
+  @ApiPropertyOptional() @IsOptional() @Transform(trim) @IsString() @MaxLength(2000) description?: string;
 
-  @ApiProperty()
-  @IsString()
-  title: string;
+  // Whole dirhams: the payment provider (NAPS) rejects fractional amounts.
+  @ApiProperty({ description: "MAD, whole number" }) @IsInt() @Min(0) @Max(10_000_000) buybackPrice: number;
+  @ApiProperty({ description: "MAD, whole number, >= buybackPrice" }) @IsInt() @Min(1) @Max(10_000_000) listingPrice: number;
+  @ApiPropertyOptional() @IsOptional() @IsInt() @Min(0) @Max(10_000_000) originalPrice?: number;
 
-  @ApiProperty({ required: false })
-  @IsOptional()
-  @IsString()
-  description?: string;
+  @ApiProperty() @IsInt() @Min(0) @Max(1000) stockQuantity: number;
 
-  @ApiProperty()
-  @IsNumber()
-  @Min(0)
-  buybackPrice: number;
-
-  @ApiProperty()
-  @IsNumber()
-  @Min(0)
-  listingPrice: number;
-
-  @ApiProperty({ required: false })
-  @IsOptional()
-  @IsNumber()
-  originalPrice?: number;
-
-  @ApiProperty()
-  @IsInt()
-  @Min(0)
-  stockQuantity: number;
-
-  @ApiProperty({ type: [String] })
+  @ApiProperty({ type: [String], description: "HTTPS image URLs (upload is not available yet)" })
   @IsArray()
+  @ArrayMaxSize(8)
+  @IsUrl({ protocols: ["https"], require_protocol: true }, { each: true })
+  @MaxLength(500, { each: true })
   images: string[];
 
-  @ApiProperty({ required: false })
-  @IsOptional()
-  specs?: Record<string, unknown>;
-
-  @ApiProperty({ required: false })
-  @IsOptional()
-  @IsBoolean()
-  isNegotiable?: boolean;
-
-  @ApiProperty({ required: false, default: 0 })
-  @IsOptional()
-  @IsInt()
-  warrantyMonths?: number;
+  @ApiPropertyOptional() @IsOptional() @IsBoolean() isNegotiable?: boolean;
+  @ApiPropertyOptional({ default: 0 }) @IsOptional() @IsInt() @Min(0) @Max(36) warrantyMonths?: number;
 }
 
 export class UpdateListingDto {
-  @ApiProperty({ required: false })
-  @IsOptional()
-  @IsNumber()
-  listingPrice?: number;
+  @ApiPropertyOptional() @IsOptional() @Transform(trim) @IsString() @Length(5, 150) title?: string;
+  @ApiPropertyOptional() @IsOptional() @IsInt() @Min(1) @Max(10_000_000) listingPrice?: number;
+  @ApiPropertyOptional() @IsOptional() @IsInt() @Min(0) @Max(1000) stockQuantity?: number;
+  @ApiPropertyOptional({ enum: FRANCHISE_LISTING_STATUSES }) @IsOptional() @IsIn(FRANCHISE_LISTING_STATUSES) status?: ListingStatus;
+  @ApiPropertyOptional() @IsOptional() @Transform(trim) @IsString() @MaxLength(2000) description?: string;
+  @ApiPropertyOptional() @IsOptional() @IsInt() @Min(0) @Max(36) warrantyMonths?: number;
+}
 
-  @ApiProperty({ required: false })
-  @IsOptional()
-  @IsInt()
-  stockQuantity?: number;
-
-  @ApiProperty({ required: false, enum: ListingStatus })
-  @IsOptional()
-  @IsEnum(ListingStatus)
-  status?: ListingStatus;
-
-  @ApiProperty({ required: false })
-  @IsOptional()
-  @IsString()
-  description?: string;
+export class ListingListQueryDto extends PaginationQueryDto {
+  @ApiPropertyOptional({ enum: ListingStatus }) @IsOptional() @IsEnum(ListingStatus) status?: ListingStatus;
 }

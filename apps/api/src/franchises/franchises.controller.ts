@@ -1,10 +1,11 @@
-import { Controller, Get, Param, UseGuards } from "@nestjs/common";
+import { Controller, Get, Param, Query, UseGuards } from "@nestjs/common";
 import { ApiTags, ApiOperation, ApiBearerAuth } from "@nestjs/swagger";
 import { JwtAuthGuard } from "../common/guards/jwt-auth.guard";
 import { RolesGuard } from "../common/guards/roles.guard";
 import { Roles } from "../common/decorators/roles.decorator";
 import { CurrentUser } from "../common/decorators/current-user.decorator";
 import { FranchisesService } from "./franchises.service";
+import { AnalyticsQueryDto } from "../admin/dto/admin.dto";
 import { Role } from "@dabacash/database";
 
 @ApiTags("franchises")
@@ -34,6 +35,15 @@ export class FranchisesController {
   @ApiOperation({ summary: "Recent sales for franchise dashboard" })
   getRecentSales(@CurrentUser() user: { id: string }) {
     return this.franchises.getRecentSales(user.id);
+  }
+
+  @Get("dashboard/analytics")
+  @ApiBearerAuth()
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.FRANCHISE_OWNER)
+  @ApiOperation({ summary: "Sales, margin and buyback analytics for my franchise only" })
+  getAnalytics(@CurrentUser() user: { id: string }, @Query() q: AnalyticsQueryDto) {
+    return this.franchises.getAnalytics(user.id, q.days ?? 30);
   }
 
   @Get(":slug")

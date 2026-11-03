@@ -11,6 +11,8 @@ export interface FraudSignals {
   imei?: string | null;
   /** Another live (pending/accepted) request already carries this IMEI. */
   imeiSeenElsewhere: boolean;
+  /** The IMEI is on the admin blocklist (reported lost/stolen or previously confirmed fraud). */
+  imeiBlocked?: boolean;
   /** Requests by this customer in the last 24 h, including the current one. */
   requestsLast24h: number;
   accountAgeHours: number;
@@ -51,6 +53,8 @@ export function scoreFraud(s: FraudSignals): FraudResult {
 
   const imei = s.imei?.trim();
   if (imei) {
+    // A blocklisted IMEI is held for human review, never auto-rejected: the list can be wrong.
+    if (s.imeiBlocked) add(1, "IMEI sur la liste de blocage");
     if (!isValidImei(imei)) add(0.4, "IMEI invalide (format ou clé de contrôle)");
     if (s.imeiSeenElsewhere) add(0.6, "IMEI déjà présent dans une autre demande en cours");
   } else if (s.deviceType === DeviceType.PHONE) {

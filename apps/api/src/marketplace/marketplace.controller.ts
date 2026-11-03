@@ -1,9 +1,7 @@
-import {
-  Controller, Get, Param, Query, ParseIntPipe,
-  ParseEnumPipe, DefaultValuePipe, Optional
-} from "@nestjs/common";
-import { ApiTags, ApiOperation, ApiQuery } from "@nestjs/swagger";
-import { Condition, DeviceType } from "@dabacash/database";
+import { Controller, Get, Param, Query } from "@nestjs/common";
+import { ApiOperation, ApiTags } from "@nestjs/swagger";
+import { Throttle } from "@nestjs/throttler";
+import { ListingsQueryDto, ModelsQueryDto } from "./dto/marketplace.dto";
 import { MarketplaceService } from "./marketplace.service";
 
 @ApiTags("marketplace")
@@ -12,46 +10,38 @@ export class MarketplaceController {
   constructor(private marketplace: MarketplaceService) {}
 
   @Get("listings")
-  @ApiOperation({ summary: "Browse marketplace listings with filters" })
-  getListings(
-    @Query("search") search?: string,
-    @Query("brand") brand?: string,
-    @Query("deviceType") deviceType?: DeviceType,
-    @Query("condition") condition?: Condition,
-    @Query("minPrice") minPrice?: number,
-    @Query("maxPrice") maxPrice?: number,
-    @Query("city") city?: string,
-    @Query("page", new DefaultValuePipe(1), ParseIntPipe) page = 1,
-    @Query("limit", new DefaultValuePipe(20), ParseIntPipe) limit = 20,
-    @Query("sortBy") sortBy?: "price_asc" | "price_desc" | "newest" | "popular"
-  ) {
-    return this.marketplace.getListings({
-      search, brand, deviceType, condition, minPrice, maxPrice,
-      city, page, limit, sortBy
-    });
+  @ApiOperation({ summary: "Browse marketplace listings (page size capped at 50)" })
+  getListings(@Query() q: ListingsQueryDto) {
+    return this.marketplace.getListings(q);
   }
 
   @Get("listings/featured")
-  @ApiOperation({ summary: "Get featured listings for homepage" })
+  @ApiOperation({ summary: "Most viewed listings for the homepage" })
   getFeatured() {
     return this.marketplace.getFeaturedListings();
   }
 
   @Get("listings/:id")
-  @ApiOperation({ summary: "Get single listing details" })
+  @Throttle({ default: { limit: 60, ttl: 60_000 } })
+  @ApiOperation({ summary: "Listing details (only listings that are for sale or sold)" })
   getListing(@Param("id") id: string) {
     return this.marketplace.getListingById(id);
   }
 
   @Get("brands")
-  @ApiOperation({ summary: "List all active brands" })
   getBrands() {
     return this.marketplace.getBrands();
   }
 
   @Get("models")
-  @ApiOperation({ summary: "List device models, optionally filtered by brand" })
-  getModels(@Query("brand") brandSlug?: string) {
-    return this.marketplace.getDeviceModels(brandSlug);
+  @ApiOperation({ summary: "Device models that can be estimated, optionally by brand" })
+  getModels(@Query() q: ModelsQueryDto) {
+    return this.marketplace.getDeviceModels(q.brand);
+  }
+
+  @Get("stats")
+  @ApiOperation({ summary: "Public platform figures (real counts)" })
+  getStats() {
+    return this.marketplace.getPublicStats();
   }
 }

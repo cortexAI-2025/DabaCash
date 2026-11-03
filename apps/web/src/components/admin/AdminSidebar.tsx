@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
-  LayoutDashboard, Store, ShoppingBag, AlertTriangle, BarChart3,
+  LayoutDashboard, Store, ShoppingBag, AlertTriangle, BarChart3, Users, CreditCard, ScrollText, Smartphone, Tags,
   LogOut, Zap
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -13,8 +13,13 @@ import { useRouter } from "next/navigation";
 const navItems = [
   { href: "/admin", icon: LayoutDashboard, label: "Vue globale" },
   { href: "/admin/franchises", icon: Store, label: "Franchises" },
+  { href: "/admin/users", icon: Users, label: "Utilisateurs" },
   { href: "/admin/orders", icon: ShoppingBag, label: "Commandes" },
+  { href: "/admin/payments", icon: CreditCard, label: "Transactions" },
   { href: "/admin/fraud", icon: AlertTriangle, label: "Fraude" },
+  { href: "/admin/imei", icon: Smartphone, label: "IMEI" },
+  { href: "/admin/catalog", icon: Tags, label: "Catalogue" },
+  { href: "/admin/audit", icon: ScrollText, label: "Audit" },
   { href: "/admin/analytics", icon: BarChart3, label: "Analytics" },
 ];
 

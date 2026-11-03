@@ -6,17 +6,12 @@ const nextConfig = {
   ...(isMobileBuild && { output: "export", trailingSlash: true }),
 
   images: {
-    // Static export doesn't support Next.js Image optimization
-    unoptimized: isMobileBuild,
-    remotePatterns: [
-      { protocol: "https", hostname: "**.supabase.co" },
-      { protocol: "https", hostname: "images.unsplash.com" },
-    ],
+    // The image optimizer is a server-side attack surface (several Next.js advisories target it)
+    // and the app serves listing photos as-is, so it stays off in every build.
+    unoptimized: true,
   },
 
-  experimental: {
-    serverActions: { allowedOrigins: ["localhost:3000"] },
-  },
+  poweredByHeader: false,
 
   env: {
     NEXT_PUBLIC_IS_MOBILE: process.env.NEXT_PUBLIC_IS_MOBILE ?? "false",
