@@ -127,12 +127,13 @@ jobs:
       # android-actions/setup-android@v3 used Node 20 runtime (deprecated warning).
       - name: Setup Android SDK components
         run: |
-          echo "ANDROID_HOME=$ANDROID_HOME"
-          sdkmanager \
+          SDKMANAGER=$(find "$ANDROID_HOME/cmdline-tools" -path '*/bin/sdkmanager' -type f | sort -V | tail -n 1)
+          test -n "$SDKMANAGER" && test -x "$SDKMANAGER"
+          printf 'y\n%.0s' {1..100} | "$SDKMANAGER" --licenses > /dev/null
+          "$SDKMANAGER" \
             "platforms;android-${{ env.ANDROID_COMPILE_SDK }}" \
             "build-tools;${{ env.ANDROID_BUILD_TOOLS_VERSION }}" \
             "platform-tools"
-          yes | sdkmanager --licenses 2>/dev/null || true
 
       # ── Restore built web output ───────────────────────────────────────────
       - name: Download static web output
