@@ -20,7 +20,9 @@ Principe : une fonctionnalité n'est « vérifiée » que si un test **exécuté
 | `npm audit --omit=dev` | | 0 vulnérabilité |
 | `npm audit` (complet) | | 24 avis, **tous dev-only** (détail dans SECURITY.md, limite 8) |
 
-Non vérifiés ici (voir limites) : paiements Aslan et emails Resend **réels**, build d'APK **signé**, exécution du workflow GitHub Actions modifié (à constater sur la PR).
+Mise à jour du 5 novembre : les workflows API/web et audit sont verts sur `6863a2f` (run 42014261224) ; les 49 vérifications navigateur sont désormais exécutées en CI sur une pile jetable (run 42014261413). L’APK debug a été construit et sa signature v1/v2 vérifiée (run 42014252175). Voir [LIVRAISON_BETA_2026-11-05.md](LIVRAISON_BETA_2026-11-05.md).
+
+Non vérifiés : paiements Aslan et emails Resend **réels**, APK **release signé avec une clé durable**, installation et parcours sur appareil physique, hébergement opérationnel de la bêta.
 
 ## Comment les tests d'intégration fonctionnent
 
@@ -60,6 +62,6 @@ Prix de rachat exposé dans les annonces publiques et les commandes clients ; ch
 
 ## Lacunes de test connues
 
-- Pas de tests automatisés du **composant** web (React) en CI : le front est couvert par le typage, le lint, le build et le script navigateur ci-dessus (manuel, nécessite une pile locale).
+- Pas de tests automatisés du **composant** web (React) en CI : le front est couvert par le typage, le lint, le build et le script navigateur ci-dessus (automatisé par `.github/workflows/browser.yml` sur une pile locale jetable).
 - Pas de test de charge ni de test avec plusieurs instances d'API.
 - Pas de test d'accessibilité automatisé (axe) ; les libellés/ARIA ont été corrigés à la main et vérifiés par le script navigateur seulement pour les parcours principaux.
