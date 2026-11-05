@@ -1,6 +1,6 @@
 /**
  * Browser smoke test (Playwright). Runs the key customer / admin / franchise journeys against a LOCAL stack
- * seeded with npm run db:seed:demo (fictitious data only). Not run in CI: it needs a running API + web.
+ * seeded with npm run db:seed:demo (fictitious data only). Run in CI by .github/workflows/browser.yml against throwaway local services.
  *
  *   DEMO_PASSWORD=... [BASE_URL=http://localhost:3000] [CHROMIUM_PATH=/path/to/chrome] node apps/web/e2e/smoke.cjs
  *
@@ -9,6 +9,11 @@
  */
 const { chromium } = require("playwright-core");
 const BASE = process.env.BASE_URL || "http://localhost:3000";
+const target = new URL(BASE);
+if (!["localhost", "127.0.0.1", "[::1]"].includes(target.hostname) || !["http:", "https:"].includes(target.protocol) || target.username || target.password) {
+  console.error("Browser acceptance is restricted to local services with fictitious data");
+  process.exit(2);
+}
 const PW = process.env.DEMO_PASSWORD;
 if (!PW) { console.error("DEMO_PASSWORD is required (the value used with db:seed:demo)"); process.exit(2); }
 const results = [];
