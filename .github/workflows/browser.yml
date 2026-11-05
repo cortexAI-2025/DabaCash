@@ -1,0 +1,97 @@
+name: Browser acceptance (isolated)
+on:
+  push:
+    branches: [main, "release/**", "feature/**"]
+    paths: ["apps/**", "packages/**", "package-lock.json", ".github/workflows/browser.yml"]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: browser-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  browser:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: dabacash
+          POSTGRES_PASSWORD: ci-only-password
+          POSTGRES_DB: dabacash_browser_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U dabacash"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+      DATABASE_URL: postgresql://dabacash:ci-only-password@localhost:5432/dabacash_browser_test
+      DIRECT_URL: postgresql://dabacash:ci-only-password@localhost:5432/dabacash_browser_test
+      API_PORT: "4000"
+      CORS_ORIGINS: http://localhost:3000
+      WEB_URL: http://localhost:3000
+      NEXT_PUBLIC_API_URL: http://localhost:4000
+      NEXT_PUBLIC_WS_URL: http://localhost:4000
+      BASE_URL: http://localhost:3000
+      # No Aslan or Resend credential: this suite exercises cash reservations only.
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - name: Generate throwaway credentials
+        run: |
+          for NAME in JWT_SECRET JWT_REFRESH_SECRET DEMO_PASSWORD; do
+            VALUE="Ci9-$(openssl rand -hex 32)"
+            echo "::add-mask::$VALUE"
+            echo "$NAME=$VALUE" >> "$GITHUB_ENV"
+          done
+      - run: npm ci
+      - name: Prepare the isolated database
+        run: |
+          npm run db:generate --workspace=packages/database
+          npm run build --workspace=packages/database
+          npm run db:migrate --workspace=packages/database
+          npm run db:seed:demo --workspace=packages/database
+      - name: Build API and web
+        run: |
+          npm run build --workspace=apps/api
+          npm run build --workspace=apps/web
+      - name: Start the local services
+        run: |
+          mkdir -p browser-artifacts
+          (cd apps/api && NODE_ENV=test node dist/main) > browser-artifacts/api.log 2>&1 &
+          echo "$!" > browser-artifacts/api.pid
+          npm run start --workspace=apps/web > browser-artifacts/web.log 2>&1 &
+          echo "$!" > browser-artifacts/web.pid
+          for URL in http://localhost:4000/api/v1/health http://localhost:3000/login; do
+            READY=0
+            for ATTEMPT in $(seq 1 60); do
+              if curl --fail --silent "$URL" > /dev/null; then READY=1; break; fi
+              sleep 1
+            done
+            test "$READY" = 1 || { echo "Local service did not become ready"; exit 1; }
+          done
+      - name: Customer, franchise, admin and mobile journeys
+        run: |
+          npm install --no-save --package-lock=false --no-audit --no-fund playwright-core@1.49.1
+          export CHROMIUM_PATH="$(command -v google-chrome)"
+          test -n "$CHROMIUM_PATH"
+          set -o pipefail
+          node apps/web/e2e/smoke.cjs | tee browser-artifacts/results.log
+      - name: Stop local services
+        if: always()
+        run: |
+          for FILE in browser-artifacts/*.pid; do
+            if [ -f "$FILE" ]; then kill "$(cat "$FILE")" 2>/dev/null || true; fi
+          done
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: browser-acceptance-${{ github.sha }}
+          path: browser-artifacts/*.log
+          retention-days: 7
+          if-no-files-found: warn
